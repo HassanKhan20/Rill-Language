@@ -66,6 +66,14 @@ struct Compiler {
   int scopeDepth = 0;
   int stackDepth = 0;
   LoopContext* loop = nullptr;
+
+  // Peephole window for constant folding. A single-pass compiler has no tree
+  // to fold over, so it instead remembers whether the last one or two
+  // instructions it emitted were constant loads, and rewrites them in place
+  // when an arithmetic operator immediately follows.
+  int pendingConsts = 0;       // 0, 1, or 2
+  uint8_t constIndex[2] = {0, 0};
+  size_t constCodeStart = 0;   // Offset of the first of the pending loads.
 };
 
 extern Compiler* current;

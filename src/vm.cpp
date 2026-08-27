@@ -324,6 +324,21 @@ InterpretResult VM::run() {
         break;
       }
 
+      case OpCode::GetLocal0: push(frame->slots[0]); break;
+      case OpCode::GetLocal1: push(frame->slots[1]); break;
+      case OpCode::GetLocal2: push(frame->slots[2]); break;
+      case OpCode::GetLocal3: push(frame->slots[3]); break;
+
+      case OpCode::AddConst: {
+        Value constant = READ_CONSTANT();
+        if (!isNumber(peek(0)) || !isNumber(constant)) {
+          RUNTIME_ERROR("operands must be two numbers or two strings");
+        }
+        // Replace in place rather than pop-then-push.
+        stackTop_[-1] = numberValue(asNumber(stackTop_[-1]) + asNumber(constant));
+        break;
+      }
+
       case OpCode::SetLocal: {
         uint8_t slot = READ_BYTE();
         // Assignment is an expression, so the value stays on the stack.

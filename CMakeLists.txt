@@ -10,8 +10,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(RILL_GC_STRESS     "Collect before every allocation" OFF)
-option(RILL_NANBOX        "Pack values into 8 bytes"        OFF)
-option(RILL_COMPUTED_GOTO "Use computed-goto dispatch"      OFF)
 option(RILL_FOLD          "Constant-fold at emit time"      ON)
 option(RILL_SUPEROPS      "Specialized opcodes"             ON)
 option(RILL_TRACE         "Trace execution"                 OFF)
@@ -33,7 +31,7 @@ add_library(rill_core
 target_include_directories(rill_core PUBLIC src)
 target_compile_options(rill_core PUBLIC -Wall -Wextra -Werror)
 
-foreach(opt RILL_GC_STRESS RILL_NANBOX RILL_COMPUTED_GOTO RILL_FOLD RILL_SUPEROPS RILL_TRACE)
+foreach(opt RILL_GC_STRESS RILL_FOLD RILL_SUPEROPS RILL_TRACE)
   if(${opt})
     target_compile_definitions(rill_core PUBLIC ${opt}=1)
   endif()

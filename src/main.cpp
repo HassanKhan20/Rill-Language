@@ -4,6 +4,9 @@
 #include <string>
 
 #include "common.hpp"
+#include "compiler.hpp"
+#include "debug.hpp"
+#include "object.hpp"
 #include "vm.hpp"
 
 namespace {
@@ -27,6 +30,17 @@ bool readFile(const char* path, std::string* out) {
     return false;
   }
   return true;
+}
+
+// Compiles without running and prints the bytecode. The quickest way to see
+// what an optimization actually did.
+int dumpFile(const char* path) {
+  std::string source;
+  if (!readFile(path, &source)) return 74;
+  rill::ObjFunction* function = rill::compile(source.c_str());
+  if (function == nullptr) return 65;
+  rill::disassembleChunk(function->chunk, "script");
+  return 0;
 }
 
 int runFile(const char* path) {
@@ -65,7 +79,9 @@ int main(int argc, char* argv[]) {
   rill::vm.init();
 
   int status = 0;
-  if (argc == 1) {
+  if (argc == 3 && std::strcmp(argv[1], "--dump") == 0) {
+    status = dumpFile(argv[2]);
+  } else if (argc == 1) {
     repl();
   } else if (argc == 2) {
     status = runFile(argv[1]);

@@ -16,6 +16,27 @@ int Chunk::addConstant(Value v) {
   return static_cast<int>(constants.size()) - 1;
 }
 
+void Chunk::rewind(size_t newSize) {
+  if (newSize >= code.size()) return;
+  size_t toRemove = code.size() - newSize;
+  code.resize(newSize);
+
+  while (toRemove > 0 && !lines_.empty()) {
+    auto& run = lines_.back();
+    if (static_cast<size_t>(run.second) > toRemove) {
+      run.second -= static_cast<int>(toRemove);
+      toRemove = 0;
+    } else {
+      toRemove -= static_cast<size_t>(run.second);
+      lines_.pop_back();
+    }
+  }
+}
+
+void Chunk::popConstant() {
+  if (!constants.empty()) constants.pop_back();
+}
+
 int Chunk::lineAt(size_t offset) const {
   size_t seen = 0;
   for (const auto& run : lines_) {
@@ -40,6 +61,10 @@ const char* opCodeName(OpCode op) {
     case OpCode::GetGlobal:    return "GetGlobal";
     case OpCode::SetGlobal:    return "SetGlobal";
     case OpCode::GetLocal:     return "GetLocal";
+    case OpCode::GetLocal0:    return "GetLocal0";
+    case OpCode::GetLocal1:    return "GetLocal1";
+    case OpCode::GetLocal2:    return "GetLocal2";
+    case OpCode::GetLocal3:    return "GetLocal3";
     case OpCode::SetLocal:     return "SetLocal";
     case OpCode::GetUpvalue:   return "GetUpvalue";
     case OpCode::SetUpvalue:   return "SetUpvalue";
@@ -52,6 +77,7 @@ const char* opCodeName(OpCode op) {
     case OpCode::Multiply: return "Multiply";
     case OpCode::Divide:   return "Divide";
     case OpCode::Modulo:   return "Modulo";
+    case OpCode::AddConst: return "AddConst";
     case OpCode::Equal:    return "Equal";
     case OpCode::Greater:  return "Greater";
     case OpCode::Less:     return "Less";

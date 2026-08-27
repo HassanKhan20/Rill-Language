@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 namespace rill {
@@ -64,8 +65,15 @@ inline bool isFalsey(Value v) {
 
 bool valuesEqual(Value a, Value b);
 
-// Writes the value in its user-facing form: numbers via %g so 5.0 prints as
-// "5", strings without surrounding quotes.
+// Writes the value in its user-facing form: strings without surrounding
+// quotes, numbers via formatNumber below.
 void printValue(Value v);
+
+// Formats a double the way Rill prints it, into `buffer`, returning the
+// length. Integral values print without a decimal point; everything else uses
+// the shortest representation that reads back as the same double. Plain "%g"
+// is not good enough: it caps at six significant digits, so 8999994000000
+// would print as 8.99999e+12.
+int formatNumber(double value, char* buffer, size_t size);
 
 }  // namespace rill

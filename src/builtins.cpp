@@ -60,7 +60,7 @@ bool nativeStr(int, Value* args, Value* result) {
   char buffer[64];
   int n = 0;
   if (isNumber(v)) {
-    n = std::snprintf(buffer, sizeof(buffer), "%g", asNumber(v));
+    n = formatNumber(asNumber(v), buffer, sizeof(buffer));
   } else if (isBool(v)) {
     n = std::snprintf(buffer, sizeof(buffer), "%s",
                       asBool(v) ? "true" : "false");

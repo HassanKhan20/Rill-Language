@@ -23,6 +23,12 @@ enum class OpCode : uint8_t {
   GetGlobal,
   SetGlobal,
   GetLocal,
+  // Specialized forms of GetLocal for the lowest slots, which dominate real
+  // code. One byte instead of two: fewer fetches and no operand decode.
+  GetLocal0,
+  GetLocal1,
+  GetLocal2,
+  GetLocal3,
   SetLocal,
   GetUpvalue,
   SetUpvalue,
@@ -35,6 +41,7 @@ enum class OpCode : uint8_t {
   Multiply,
   Divide,
   Modulo,
+  AddConst,  // Operand: constant index. Fuses `Constant c; Add`.
   Equal,
   Greater,
   Less,
@@ -61,6 +68,15 @@ class Chunk {
 
   // The source line for the instruction byte at `offset`.
   int lineAt(size_t offset) const;
+
+  // Truncates the code back to `newSize`, keeping the run-length line
+  // encoding consistent. Used by the constant folder, which un-emits the two
+  // constant loads it is replacing.
+  void rewind(size_t newSize);
+
+  // Drops the last constant from the pool. Only valid when it was just added
+  // and nothing else references it.
+  void popConstant();
 
   // Number of run-length entries, exposed so tests can assert the encoding
   // actually compresses.

@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  APT_PACKAGES: g++ clang cmake ninja-build valgrind python3
+
 jobs:
   build:
     name: ${{ matrix.compiler }} / ${{ matrix.buildtype }}
@@ -16,20 +19,113 @@ jobs:
         buildtype: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
-
       - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y g++ clang cmake ninja-build python3
-
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} \
             -DCMAKE_BUILD_TYPE=${{ matrix.buildtype }}
-
       - name: Build
         run: cmake --build build
-
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  gc-stress:
+    name: GC stress
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      # Collecting before every single allocation turns a latent collector bug
+      # into a deterministic failure on the test that introduced it.
+      - name: Build with RILL_GC_STRESS
+        run: |
+          cmake -S . -B build -G Ninja -DRILL_GC_STRESS=ON
+          cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  valgrind:
+    name: valgrind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+      - name: Unit tests under valgrind
+        run: |
+          valgrind --leak-check=full --errors-for-leak-kinds=all \
+                   --error-exitcode=1 ./build/rill_tests
+      # The VM frees every remaining object at teardown, so any leak valgrind
+      # reports here is a real defect rather than expected shutdown noise.
+      - name: Every behavior test under valgrind
+        run: |
+          python3 tests/run_behavior_tests.py ./build/rill tests/lang \
+            valgrind --leak-check=full --errors-for-leak-kinds=all \
+                     --error-exitcode=1 -q
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build
+      - name: Test
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  optimizations:
+    name: opt ${{ matrix.opt }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each optimization is toggled independently. Every configuration must
+        # produce byte-identical program output: an optimization that changes
+        # observable behaviour is a bug, not an optimization.
+        opt:
+          - "-DRILL_FOLD=OFF -DRILL_SUPEROPS=OFF"
+          - "-DRILL_FOLD=ON  -DRILL_SUPEROPS=OFF"
+          - "-DRILL_FOLD=OFF -DRILL_SUPEROPS=ON"
+          - "-DRILL_FOLD=ON  -DRILL_SUPEROPS=ON"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.opt }}
+          cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  test-count:
+    name: test count guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The project promises 100+ language behavior tests. Losing them
+      # silently would be worse than failing loudly.
+      - name: Require at least 100 behavior tests
+        run: |
+          count=$(find tests/lang -name '*.rl' | wc -l)
+          echo "behavior tests: $count"
+          if [ "$count" -lt 100 ]; then
+            echo "::error::expected at least 100 behavior tests, found $count"
+            exit 1
+          fi

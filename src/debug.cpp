@@ -60,6 +60,8 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return constantInstruction("SetGlobal", chunk, offset);
     case OpCode::GetLocal:
       return byteInstruction("GetLocal", chunk, offset);
+    case OpCode::AddConst:
+      return constantInstruction("AddConst", chunk, offset);
     case OpCode::SetLocal:
       return byteInstruction("SetLocal", chunk, offset);
     case OpCode::CloseScope:
@@ -109,6 +111,10 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
     case OpCode::Nil:
     case OpCode::True:
     case OpCode::False:
+    case OpCode::GetLocal0:
+    case OpCode::GetLocal1:
+    case OpCode::GetLocal2:
+    case OpCode::GetLocal3:
     case OpCode::Pop:
     case OpCode::Dup:
     case OpCode::Swap:
