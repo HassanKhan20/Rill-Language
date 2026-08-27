@@ -15,6 +15,7 @@ enum class OpCode : uint8_t {
   True,
   False,
   Pop,
+  Dup,
   PopN,        // Operand: how many values to discard from the top.
   CloseScope,  // Operand: how many slots to discard from under the top value.
   DefineGlobal,
@@ -38,6 +39,7 @@ enum class OpCode : uint8_t {
   Less,
   Jump,          // Operand: two-byte forward offset.
   JumpIfFalse,   // Operand: two-byte forward offset. Does not pop.
+  JumpIfTrue,    // Operand: two-byte forward offset. Does not pop.
   Loop,          // Operand: two-byte backward offset.
   Call,   // Operand: argument count.
   Return,

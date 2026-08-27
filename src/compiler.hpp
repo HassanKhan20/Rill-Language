@@ -151,6 +151,15 @@ void endScope();
 // slot its already-emitted initializer occupies.
 void declareLocal(Token name, bool isMutable);
 
+// Declares an immutable local that aliases an existing stack slot rather than
+// claiming a new one. Used by match binding patterns, which name the subject
+// already sitting on the stack.
+void declareLocalAtSlot(Token name, int slot);
+
+// Drops the most recently declared local without emitting anything. The caller
+// is responsible for the stack slot it named.
+void removeInnermostLocal();
+
 // Returns the slot of a local with this name, or -1. Reports an error if the
 // name is found but is still being initialized.
 int resolveLocal(Compiler* compiler, Token name, bool* isMutableOut);

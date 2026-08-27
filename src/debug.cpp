@@ -70,6 +70,8 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return jumpInstruction("Jump", 1, chunk, offset);
     case OpCode::JumpIfFalse:
       return jumpInstruction("JumpIfFalse", 1, chunk, offset);
+    case OpCode::JumpIfTrue:
+      return jumpInstruction("JumpIfTrue", 1, chunk, offset);
     case OpCode::Loop:
       return jumpInstruction("Loop", -1, chunk, offset);
     case OpCode::Call:
@@ -102,6 +104,7 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
     case OpCode::True:
     case OpCode::False:
     case OpCode::Pop:
+    case OpCode::Dup:
     case OpCode::Negate:
     case OpCode::Not:
     case OpCode::Add:

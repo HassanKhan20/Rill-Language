@@ -210,6 +210,7 @@ InterpretResult VM::run() {
       case OpCode::True:     push(boolValue(true)); break;
       case OpCode::False:    push(boolValue(false)); break;
       case OpCode::Pop:      pop(); break;
+      case OpCode::Dup:      push(peek(0)); break;
 
       case OpCode::DefineGlobal: {
         ObjString* name = asString(READ_CONSTANT());
@@ -278,6 +279,12 @@ InterpretResult VM::run() {
         // Deliberately does not pop: the compiler emits an explicit Pop on
         // each path, which is what lets `and`/`or` yield an operand.
         if (isFalsey(peek(0))) ip += offset;
+        break;
+      }
+
+      case OpCode::JumpIfTrue: {
+        uint16_t offset = READ_SHORT();
+        if (!isFalsey(peek(0))) ip += offset;
         break;
       }
 

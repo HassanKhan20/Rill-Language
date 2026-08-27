@@ -4,6 +4,7 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "compiler.hpp"
 #include "object.hpp"
@@ -217,6 +218,109 @@ uint8_t argumentList() {
 
 void call(bool) { emitCall(argumentList()); }
 
+// `match` is an expression. The subject is evaluated once and left in a single
+// stack slot for the whole match, which is what lets a binding pattern simply
+// alias that slot instead of copying anything.
+//
+// Layout, with the subject at slot `base`:
+//
+//   <subject>                     depth base+1, stays put
+//   for each arm:
+//     Dup; Constant; Equal        the test, depth base+2
+//     JumpIfFalse -> next arm     the bool stays on the stack
+//     Pop                         discard the bool on the matched path
+//     <body>                      depth base+2
+//     CloseScope 1                drop the subject from under the result
+//     Jump -> end
+//   Pop; Nil                      no arm matched
+void matchExpr(bool) {
+  int base = stackDepth();
+
+  expression();  // The subject; now at slot `base`.
+  consume(TokenType::LeftBrace, "expected '{' after match subject");
+
+  std::vector<int> endJumps;
+  bool sawIrrefutable = false;
+
+  while (!check(TokenType::RightBrace) && !check(TokenType::Eof)) {
+    std::vector<int> armFailJumps;
+    bool boundName = false;
+
+    if (match(TokenType::Underscore)) {
+      sawIrrefutable = true;
+    } else if (check(TokenType::Identifier)) {
+      // A binding pattern always matches and names the subject.
+      advance();
+      Token name = parser.previous;
+      declareLocalAtSlot(name, base);
+      boundName = true;
+      sawIrrefutable = true;
+    } else {
+      // One or more literal alternatives joined by '|'.
+      std::vector<int> matchedJumps;
+      for (;;) {
+        emitOp(OpCode::Dup);
+        parsePrecedence(Prec::Or);  // A literal, not a full expression.
+        emitOp(OpCode::Equal);
+
+        if (check(TokenType::Pipe)) {
+          advance();
+          matchedJumps.push_back(emitJump(OpCode::JumpIfTrue));
+          emitOp(OpCode::Pop);  // Not this one; try the next alternative.
+          continue;
+        }
+        armFailJumps.push_back(emitJump(OpCode::JumpIfFalse));
+        break;
+      }
+      // Every alternative that matched lands on the Pop just below.
+      for (int j : matchedJumps) patchJump(j);
+      setStackDepth(base + 2);
+      emitOp(OpCode::Pop);
+    }
+
+    // An optional guard, which can reject an otherwise-matching pattern.
+    if (match(TokenType::If)) {
+      expression();
+      armFailJumps.push_back(emitJump(OpCode::JumpIfFalse));
+      emitOp(OpCode::Pop);
+    }
+
+    consume(TokenType::Arrow, "expected '->' after match pattern");
+    setStackDepth(base + 1);
+    expression();  // The arm body; depth base+2.
+
+    if (boundName) removeInnermostLocal();
+
+    // Drop the subject from underneath the arm's result.
+    emitOpArg(OpCode::CloseScope, 1);
+    setStackDepth(base + 1);
+    endJumps.push_back(emitJump(OpCode::Jump));
+
+    // Failed tests arrive here with their bool still on the stack.
+    if (!armFailJumps.empty()) {
+      for (int j : armFailJumps) patchJump(j);
+      setStackDepth(base + 2);
+      emitOp(OpCode::Pop);
+    } else {
+      setStackDepth(base + 1);
+    }
+
+    if (!match(TokenType::Comma)) break;
+  }
+
+  consume(TokenType::RightBrace, "expected '}' after match arms");
+
+  // No arm matched. Dynamically typed, so this is nil rather than an error;
+  // an irrefutable arm makes this path unreachable but harmless.
+  (void)sawIrrefutable;
+  setStackDepth(base + 1);
+  emitOp(OpCode::Pop);
+  emitOp(OpCode::Nil);
+
+  for (int j : endJumps) patchJump(j);
+  setStackDepth(base + 1);
+}
+
 // `let` and `var` are prefix expressions, not statements: a declaration is an
 // expression that yields nil.
 void declaration(bool) {
@@ -408,7 +512,7 @@ const ParseRule kRules[] = {
     /* If           */ {ifExpr,   nullptr, Prec::None},
     /* Else         */ {nullptr,  nullptr, Prec::None},
     /* While        */ {whileExpr, nullptr, Prec::None},
-    /* Match        */ {nullptr,  nullptr, Prec::None},
+    /* Match        */ {matchExpr, nullptr, Prec::None},
     /* And          */ {nullptr,  andExpr, Prec::And},
     /* Or           */ {nullptr,  orExpr,  Prec::Or},
     /* True         */ {literal,  nullptr, Prec::None},

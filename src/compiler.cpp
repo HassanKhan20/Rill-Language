@@ -24,6 +24,7 @@ int stackEffect(OpCode op) {
     case OpCode::GetLocal:
     case OpCode::GetUpvalue:
     case OpCode::Closure:
+    case OpCode::Dup:
       return +1;
 
     case OpCode::Pop:
@@ -53,6 +54,7 @@ int stackEffect(OpCode op) {
     case OpCode::CloseScope:
     case OpCode::Jump:
     case OpCode::JumpIfFalse:
+    case OpCode::JumpIfTrue:
     case OpCode::Loop:
     case OpCode::Call:
     case OpCode::Return:
@@ -308,6 +310,23 @@ int resolveUpvalue(Compiler* compiler, Token name, bool* isMutableOut) {
     return addUpvalue(compiler, static_cast<uint8_t>(upvalue), false);
   }
   return -1;
+}
+
+void declareLocalAtSlot(Token name, int slot) {
+  if (current->localCount == kUint8Count) {
+    error("too many local bindings in one function");
+    return;
+  }
+  Local* local = &current->locals[current->localCount++];
+  local->name = name;
+  local->depth = current->scopeDepth;
+  local->slot = slot;
+  local->isCaptured = false;
+  local->isMutable = false;
+}
+
+void removeInnermostLocal() {
+  if (current->localCount > 0) current->localCount--;
 }
 
 int resolveLocal(Compiler* compiler, Token name, bool* isMutableOut) {
