@@ -63,6 +63,22 @@ let c = if n > 0 { "pos" } else { "neg" }
 This rule is the language's spine and the source of the compiler's central
 invariant: **every construct leaves exactly one value on the stack.**
 
+A `;` is optional punctuation. Its only job is to discard, and two expressions
+may simply follow one another, in which case the earlier one is discarded
+anyway:
+
+```rill
+print(a)      # value discarded because another expression follows
+print(b)      # the sequence's value
+```
+
+The cost of making `;` optional is that a line beginning with `-` or `(`
+continues the previous line rather than starting a new expression: `a` newline
+`-b` parses as `a - b`. Writing the `;` resolves it. This is the same tradeoff
+Lua makes, and it is preferred here over mandatory semicolons because the
+language is expression-oriented and most lines are values rather than
+statements.
+
 ### 4.2 Bindings
 
 `let` introduces an immutable binding; `var` introduces a mutable one.
@@ -183,7 +199,7 @@ shadowed.
 ```
 program     -> exprList EOF
 block       -> "{" exprList "}"
-exprList    -> ( expr ";" )* expr?          # value = final expr, else nil
+exprList    -> ( expr ";"? )*               # value = final expr, else nil
 expr        -> assignment
 assignment  -> ( call "." )? IDENT "=" assignment | matchExpr
 matchExpr   -> "match" expr "{" arm ( "," arm )* ","? "}" | ifExpr

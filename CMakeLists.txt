@@ -24,6 +24,9 @@ add_library(rill_core
   src/debug.cpp
   src/table.cpp
   src/object.cpp
+  src/compiler.cpp
+  src/parser.cpp
+  src/vm.cpp
 )
 target_include_directories(rill_core PUBLIC src)
 target_compile_options(rill_core PUBLIC -Wall -Wextra -Werror)

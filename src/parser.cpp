@@ -1,0 +1,205 @@
+#include "parser.hpp"
+
+#include <cstdlib>
+#include <cstring>
+
+#include "compiler.hpp"
+#include "object.hpp"
+
+namespace rill {
+
+namespace {
+
+using ParseFn = void (*)(bool canAssign);
+
+struct ParseRule {
+  ParseFn prefix;
+  ParseFn infix;
+  Prec precedence;
+};
+
+const ParseRule* getRule(TokenType type);
+
+void number(bool) {
+  double value = std::strtod(parser.previous.start, nullptr);
+  emitConstant(numberValue(value));
+}
+
+void string(bool) {
+  // Trim the surrounding quotes.
+  emitConstant(objValue(
+      copyString(parser.previous.start + 1, parser.previous.length - 2)));
+}
+
+void literal(bool) {
+  switch (parser.previous.type) {
+    case TokenType::False: emitOp(OpCode::False); break;
+    case TokenType::True:  emitOp(OpCode::True); break;
+    case TokenType::Nil:   emitOp(OpCode::Nil); break;
+    default: return;  // Unreachable.
+  }
+}
+
+void grouping(bool) {
+  expression();
+  consume(TokenType::RightParen, "expected ')' after expression");
+}
+
+void unary(bool) {
+  TokenType op = parser.previous.type;
+  parsePrecedence(Prec::Unary);
+  switch (op) {
+    case TokenType::Minus: emitOp(OpCode::Negate); break;
+    case TokenType::Bang:  emitOp(OpCode::Not); break;
+    default: return;  // Unreachable.
+  }
+}
+
+void binary(bool) {
+  TokenType op = parser.previous.type;
+  const ParseRule* rule = getRule(op);
+  // Recursing one level tighter makes binary operators left-associative.
+  parsePrecedence(static_cast<Prec>(static_cast<int>(rule->precedence) + 1));
+
+  switch (op) {
+    case TokenType::Plus:    emitOp(OpCode::Add); break;
+    case TokenType::Minus:   emitOp(OpCode::Subtract); break;
+    case TokenType::Star:    emitOp(OpCode::Multiply); break;
+    case TokenType::Slash:   emitOp(OpCode::Divide); break;
+    case TokenType::Percent: emitOp(OpCode::Modulo); break;
+
+    case TokenType::EqualEqual: emitOp(OpCode::Equal); break;
+    case TokenType::Greater:    emitOp(OpCode::Greater); break;
+    case TokenType::Less:       emitOp(OpCode::Less); break;
+    // The negated forms reuse their positive counterpart plus Not, which
+    // keeps the opcode set smaller at the cost of one extra instruction.
+    case TokenType::BangEqual:    emitOps(OpCode::Equal, OpCode::Not); break;
+    case TokenType::GreaterEqual: emitOps(OpCode::Less, OpCode::Not); break;
+    case TokenType::LessEqual:    emitOps(OpCode::Greater, OpCode::Not); break;
+    default: return;  // Unreachable.
+  }
+}
+
+// Temporary: `print` is recognised syntactically until native functions land,
+// at which point this becomes an ordinary call and OpCode::Print disappears.
+void identifier(bool) {
+  if (parser.previous.length == 5 &&
+      std::memcmp(parser.previous.start, "print", 5) == 0) {
+    consume(TokenType::LeftParen, "expected '(' after 'print'");
+    expression();
+    consume(TokenType::RightParen, "expected ')' after argument");
+    emitOp(OpCode::Print);
+    return;
+  }
+  error("undefined variable");
+}
+
+// clang-format off
+const ParseRule kRules[] = {
+    /* LeftParen    */ {grouping, nullptr, Prec::None},
+    /* RightParen   */ {nullptr,  nullptr, Prec::None},
+    /* LeftBrace    */ {nullptr,  nullptr, Prec::None},
+    /* RightBrace   */ {nullptr,  nullptr, Prec::None},
+    /* Comma        */ {nullptr,  nullptr, Prec::None},
+    /* Dot          */ {nullptr,  nullptr, Prec::None},
+    /* Semicolon    */ {nullptr,  nullptr, Prec::None},
+    /* Colon        */ {nullptr,  nullptr, Prec::None},
+    /* Pipe         */ {nullptr,  nullptr, Prec::None},
+    /* Plus         */ {nullptr,  binary,  Prec::Term},
+    /* Minus        */ {unary,    binary,  Prec::Term},
+    /* Star         */ {nullptr,  binary,  Prec::Factor},
+    /* Slash        */ {nullptr,  binary,  Prec::Factor},
+    /* Percent      */ {nullptr,  binary,  Prec::Factor},
+    /* Bang         */ {unary,    nullptr, Prec::None},
+    /* BangEqual    */ {nullptr,  binary,  Prec::Equality},
+    /* Equal        */ {nullptr,  nullptr, Prec::None},
+    /* EqualEqual   */ {nullptr,  binary,  Prec::Equality},
+    /* Less         */ {nullptr,  binary,  Prec::Comparison},
+    /* LessEqual    */ {nullptr,  binary,  Prec::Comparison},
+    /* Greater      */ {nullptr,  binary,  Prec::Comparison},
+    /* GreaterEqual */ {nullptr,  binary,  Prec::Comparison},
+    /* Arrow        */ {nullptr,  nullptr, Prec::None},
+    /* Identifier   */ {identifier, nullptr, Prec::None},
+    /* String       */ {string,   nullptr, Prec::None},
+    /* Number       */ {number,   nullptr, Prec::None},
+    /* Underscore   */ {nullptr,  nullptr, Prec::None},
+    /* Let          */ {nullptr,  nullptr, Prec::None},
+    /* Var          */ {nullptr,  nullptr, Prec::None},
+    /* Fn           */ {nullptr,  nullptr, Prec::None},
+    /* If           */ {nullptr,  nullptr, Prec::None},
+    /* Else         */ {nullptr,  nullptr, Prec::None},
+    /* While        */ {nullptr,  nullptr, Prec::None},
+    /* Match        */ {nullptr,  nullptr, Prec::None},
+    /* And          */ {nullptr,  nullptr, Prec::None},
+    /* Or           */ {nullptr,  nullptr, Prec::None},
+    /* True         */ {literal,  nullptr, Prec::None},
+    /* False        */ {literal,  nullptr, Prec::None},
+    /* Nil          */ {literal,  nullptr, Prec::None},
+    /* Return       */ {nullptr,  nullptr, Prec::None},
+    /* Break        */ {nullptr,  nullptr, Prec::None},
+    /* Continue     */ {nullptr,  nullptr, Prec::None},
+    /* Error        */ {nullptr,  nullptr, Prec::None},
+    /* Eof          */ {nullptr,  nullptr, Prec::None},
+};
+// clang-format on
+
+static_assert(sizeof(kRules) / sizeof(kRules[0]) ==
+                  static_cast<size_t>(TokenType::Eof) + 1,
+              "parse rule table must have one entry per TokenType");
+
+const ParseRule* getRule(TokenType type) {
+  return &kRules[static_cast<size_t>(type)];
+}
+
+}  // namespace
+
+void parsePrecedence(Prec precedence) {
+  advance();
+  ParseFn prefixRule = getRule(parser.previous.type)->prefix;
+  if (prefixRule == nullptr) {
+    error("expected expression");
+    return;
+  }
+
+  bool canAssign = precedence <= Prec::Assignment;
+  prefixRule(canAssign);
+
+  while (precedence <= getRule(parser.current.type)->precedence) {
+    advance();
+    ParseFn infixRule = getRule(parser.previous.type)->infix;
+    infixRule(canAssign);
+  }
+
+  if (canAssign && match(TokenType::Equal)) {
+    error("invalid assignment target");
+  }
+}
+
+void expression() { parsePrecedence(Prec::Assignment); }
+
+void exprList(TokenType terminator) {
+  // An empty sequence still has to leave a value.
+  if (check(terminator) || check(TokenType::Eof)) {
+    emitOp(OpCode::Nil);
+    return;
+  }
+
+  for (;;) {
+    expression();
+    bool discarded = match(TokenType::Semicolon);
+
+    if (check(terminator) || check(TokenType::Eof)) {
+      // A trailing ';' discarded the last value, so the sequence yields nil.
+      if (discarded) emitOp(OpCode::Nil);
+      return;
+    }
+
+    // Another expression follows, so this one's value is thrown away whether
+    // or not a ';' said so explicitly.
+    emitOp(OpCode::Pop);
+
+    if (parser.hadError && parser.panicMode) return;
+  }
+}
+
+}  // namespace rill

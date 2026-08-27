@@ -1,1 +1,2 @@
-# smoke test placeholder - real expectations arrive with the VM
+# expect: 5
+print(2 + 3)

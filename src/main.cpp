@@ -4,10 +4,10 @@
 #include <string>
 
 #include "common.hpp"
+#include "vm.hpp"
 
 namespace {
 
-// Reads a whole file into a string. Returns false and reports on failure.
 bool readFile(const char* path, std::string* out) {
   std::FILE* file = std::fopen(path, "rb");
   if (file == nullptr) {
@@ -19,14 +19,39 @@ bool readFile(const char* path, std::string* out) {
   std::rewind(file);
 
   out->resize(static_cast<size_t>(size));
-  size_t read = std::fread(&(*out)[0], sizeof(char), static_cast<size_t>(size),
-                           file);
+  size_t read = std::fread(&(*out)[0], sizeof(char),
+                           static_cast<size_t>(size), file);
   std::fclose(file);
   if (read < static_cast<size_t>(size)) {
     std::fprintf(stderr, "could not read file \"%s\"\n", path);
     return false;
   }
   return true;
+}
+
+int runFile(const char* path) {
+  std::string source;
+  if (!readFile(path, &source)) return 74;
+
+  rill::InterpretResult result = rill::vm.interpret(source.c_str());
+  switch (result) {
+    case rill::InterpretResult::Ok:           return 0;
+    case rill::InterpretResult::CompileError: return 65;
+    case rill::InterpretResult::RuntimeError: return 70;
+  }
+  return 70;
+}
+
+void repl() {
+  char line[1024];
+  for (;;) {
+    std::printf("> ");
+    if (!std::fgets(line, sizeof(line), stdin)) {
+      std::printf("\n");
+      break;
+    }
+    rill::vm.interpret(line);
+  }
 }
 
 }  // namespace
@@ -37,14 +62,18 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  if (argc == 2) {
-    std::string source;
-    if (!readFile(argv[1], &source)) return 74;
-    // The interpreter is wired up in a later task; for now a readable file is
-    // a successful run.
-    return 0;
+  rill::vm.init();
+
+  int status = 0;
+  if (argc == 1) {
+    repl();
+  } else if (argc == 2) {
+    status = runFile(argv[1]);
+  } else {
+    std::fprintf(stderr, "usage: rill [script.rl]\n");
+    status = 64;
   }
 
-  std::fprintf(stderr, "usage: rill [script.rl]\n");
-  return 64;
+  rill::vm.free();
+  return status;
 }
