@@ -19,6 +19,9 @@ option(RILL_TRACE         "Trace execution"                 OFF)
 add_library(rill_core
   src/common.cpp
   src/lexer.cpp
+  src/value.cpp
+  src/chunk.cpp
+  src/debug.cpp
 )
 target_include_directories(rill_core PUBLIC src)
 target_compile_options(rill_core PUBLIC -Wall -Wextra -Werror)
@@ -37,6 +40,7 @@ enable_testing()
 add_executable(rill_tests
   tests/unit/main.cpp
   tests/unit/test_lexer.cpp
+  tests/unit/test_chunk.cpp
 )
 target_link_libraries(rill_tests PRIVATE rill_core)
 target_include_directories(rill_tests PRIVATE tests/unit)
