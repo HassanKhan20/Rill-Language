@@ -163,6 +163,16 @@ void markVMRoots() {
   for (ObjUpvalue* uv = vm.openUpvalues_; uv != nullptr; uv = uv->next) {
     markObject(reinterpret_cast<Obj*>(uv));
   }
+  // The undo log holds values that may be unreachable from anywhere else.
+  for (const UndoRecord& rec : vm.recorder_.records()) {
+    for (int i = 0; i < rec.savedCount; i++) markValue(rec.saved[i]);
+    if (rec.slotTarget != nullptr) markValue(rec.slotOld);
+    if (rec.tableTarget != nullptr) {
+      markObject(reinterpret_cast<Obj*>(rec.tableKey));
+      if (rec.tableHadKey) markValue(rec.tableOld);
+    }
+  }
+
   for (int i = 0; i < vm.globals_.capacity; i++) {
     Entry* entry = &vm.globals_.entries[i];
     if (entry->key != nullptr) markObject(reinterpret_cast<Obj*>(entry->key));
@@ -178,7 +188,24 @@ bool bothStrings(Value a, Value b) { return isString(a) && isString(b); }
 
 }  // namespace
 
-InterpretResult VM::run() {
+void VM::noteSlotWrite(Value* target) {
+  if (!recorder_.enabled()) return;
+  UndoRecord* rec = recorder_.current();
+  if (rec == nullptr || rec->slotTarget != nullptr) return;
+  rec->slotTarget = target;
+  rec->slotOld = *target;
+}
+
+void VM::noteTableWrite(Table* table, ObjString* key) {
+  if (!recorder_.enabled()) return;
+  UndoRecord* rec = recorder_.current();
+  if (rec == nullptr || rec->tableTarget != nullptr) return;
+  rec->tableTarget = table;
+  rec->tableKey = key;
+  rec->tableHadKey = table->get(key, &rec->tableOld);
+}
+
+InterpretResult VM::run(bool singleStep) {
   CallFrame* frame = &frames_[frameCount_ - 1];
   // `ip` is cached in a local so the hot loop does not chase a pointer through
   // the frame on every instruction. It MUST be written back to the frame
@@ -228,6 +255,18 @@ InterpretResult VM::run() {
         frame->closure->function->chunk,
         static_cast<int>(ip - frame->closure->function->chunk.code.data()));
 #endif
+
+    if (recorder_.enabled()) {
+      // Save the top few stack values before the instruction consumes them.
+      // Three is enough: no opcode takes more than three stack operands.
+      int height = static_cast<int>(stackTop_ - stack_);
+      int keep = height < 3 ? height : 3;
+      const Chunk& chunk = frame->closure->function->chunk;
+      recorder_.begin(ip, height, frameCount_,
+                      chunk.lineAt(static_cast<size_t>(
+                          ip - chunk.code.data())),
+                      stackTop_ - keep, keep);
+    }
 
     auto instruction = static_cast<OpCode>(READ_BYTE());
     switch (instruction) {
@@ -283,6 +322,7 @@ InterpretResult VM::run() {
           RUNTIME_ERROR("only maps have properties");
         }
         // Assignment always writes to the receiver, never to a prototype.
+        noteTableWrite(&asMap(peek(1))->fields, name);
         asMap(peek(1))->fields.set(name, peek(0));
         Value value = pop();
         pop();  // The receiver.
@@ -292,6 +332,7 @@ InterpretResult VM::run() {
 
       case OpCode::DefineGlobal: {
         ObjString* name = asString(READ_CONSTANT());
+        noteTableWrite(&globals_, name);
         globals_.set(name, peek(0));
         pop();
         break;
@@ -311,6 +352,7 @@ InterpretResult VM::run() {
         ObjString* name = asString(READ_CONSTANT());
         // Assignment never creates a binding, so a miss is an error and the
         // entry it just created must be undone.
+        noteTableWrite(&globals_, name);
         if (globals_.set(name, peek(0))) {
           globals_.remove(name);
           RUNTIME_ERROR("undefined variable '%s'", name->chars);
@@ -341,6 +383,7 @@ InterpretResult VM::run() {
 
       case OpCode::SetLocal: {
         uint8_t slot = READ_BYTE();
+        noteSlotWrite(&frame->slots[slot]);
         // Assignment is an expression, so the value stays on the stack.
         frame->slots[slot] = peek(0);
         break;
@@ -462,6 +505,7 @@ InterpretResult VM::run() {
 
       case OpCode::SetUpvalue: {
         uint8_t index = READ_BYTE();
+        noteSlotWrite(frame->closure->upvalues[index]->location);
         *frame->closure->upvalues[index]->location = peek(0);
         break;
       }
@@ -501,6 +545,11 @@ InterpretResult VM::run() {
         break;
       }
     }
+
+    if (singleStep) {
+      STORE_IP();
+      return InterpretResult::Ok;
+    }
   }
 
 #undef BINARY_NUMERIC
@@ -510,6 +559,80 @@ InterpretResult VM::run() {
 #undef READ_SHORT
 #undef READ_CONSTANT
 #undef READ_BYTE
+}
+
+bool VM::stepBack() {
+  if (recorder_.empty()) return false;
+  UndoRecord rec = recorder_.pop();
+
+  // Undo the deep write first: the stack restore below may overwrite the
+  // slot this record refers to.
+  if (rec.slotTarget != nullptr) *rec.slotTarget = rec.slotOld;
+  if (rec.tableTarget != nullptr) {
+    if (rec.tableHadKey) {
+      rec.tableTarget->set(rec.tableKey, rec.tableOld);
+    } else {
+      rec.tableTarget->remove(rec.tableKey);
+    }
+  }
+
+  // Frames live in a fixed array and are never cleared, so restoring the
+  // count brings a popped frame's contents back intact.
+  frameCount_ = rec.frameCount;
+  stackTop_ = stack_ + rec.stackHeight;
+  for (int i = 0; i < rec.savedCount; i++) {
+    stack_[rec.stackHeight - rec.savedCount + i] = rec.saved[i];
+  }
+  if (frameCount_ > 0) frames_[frameCount_ - 1].ip = rec.ip;
+  return true;
+}
+
+InterpretResult VM::stepForward() {
+  if (frameCount_ == 0) return InterpretResult::Ok;
+  return run(/*singleStep=*/true);
+}
+
+int VM::currentLine() const {
+  if (frameCount_ == 0) return -1;
+  const CallFrame& frame = frames_[frameCount_ - 1];
+  const Chunk& chunk = frame.closure->function->chunk;
+  return chunk.lineAt(static_cast<size_t>(frame.ip - chunk.code.data()));
+}
+
+void VM::printBacktrace() const {
+  if (frameCount_ == 0) {
+    std::printf("  <program finished>\n");
+    return;
+  }
+  for (int i = frameCount_ - 1; i >= 0; i--) {
+    const CallFrame& frame = frames_[i];
+    ObjFunction* function = frame.closure->function;
+    const Chunk& chunk = function->chunk;
+    int line = chunk.lineAt(static_cast<size_t>(frame.ip - chunk.code.data()));
+    std::printf("  [line %d] in %s\n", line,
+                function->name == nullptr ? "script" : function->name->chars);
+  }
+}
+
+bool VM::lookupGlobal(const char* name, Value* out) const {
+  ObjString* key = copyString(name, static_cast<int>(std::strlen(name)));
+  return const_cast<Table&>(globals_).get(key, out);
+}
+
+InterpretResult VM::recordProgram(const char* source) {
+  ObjFunction* function = compile(source);
+  if (function == nullptr) return InterpretResult::CompileError;
+
+  pushTempRoot(objValue(function));
+  ObjClosure* closure = newClosure(function);
+  popTempRoot();
+
+  push(objValue(closure));
+  call(closure, 0);
+
+  recorder_.clear();
+  recorder_.setEnabled(true);
+  return InterpretResult::Ok;
 }
 
 InterpretResult VM::interpret(const char* source) {

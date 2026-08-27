@@ -5,6 +5,7 @@
 
 #include "common.hpp"
 #include "compiler.hpp"
+#include "debugger.hpp"
 #include "debug.hpp"
 #include "object.hpp"
 #include "vm.hpp"
@@ -81,6 +82,20 @@ int main(int argc, char* argv[]) {
   int status = 0;
   if (argc == 3 && std::strcmp(argv[1], "--dump") == 0) {
     status = dumpFile(argv[2]);
+  } else if (argc == 3 && std::strcmp(argv[1], "--record") == 0) {
+    std::string source;
+    if (!readFile(argv[2], &source)) {
+      status = 74;
+    } else {
+      status = rill::runRecorded(source.c_str());
+    }
+  } else if (argc == 3 && std::strcmp(argv[1], "--debug") == 0) {
+    std::string source;
+    if (!readFile(argv[2], &source)) {
+      status = 74;
+    } else {
+      status = rill::runDebugger(argv[2], source.c_str());
+    }
   } else if (argc == 1) {
     repl();
   } else if (argc == 2) {

@@ -114,6 +114,27 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  debugger:
+    name: time-travel debugger
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: Backward stepping restores state
+        run: python3 tests/test_debugger.py ./build/rill
+      # Recording holds values reachable from nowhere else, so the undo log
+      # must be a GC root. Stress mode is what proves it.
+      - name: Under GC stress
+        run: |
+          cmake -S . -B build-stress -G Ninja -DRILL_GC_STRESS=ON
+          cmake --build build-stress
+          python3 tests/test_debugger.py ./build-stress/rill
+
   test-count:
     name: test count guard
     runs-on: ubuntu-latest

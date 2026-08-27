@@ -27,6 +27,7 @@ add_library(rill_core
   src/vm.cpp
   src/builtins.cpp
   src/gc.cpp
+  src/debugger.cpp
 )
 target_include_directories(rill_core PUBLIC src)
 target_compile_options(rill_core PUBLIC -Wall -Wextra -Werror)
@@ -59,3 +60,8 @@ add_test(NAME behavior
           ${CMAKE_SOURCE_DIR}/tests/run_behavior_tests.py
           $<TARGET_FILE:rill>
           ${CMAKE_SOURCE_DIR}/tests/lang)
+
+add_test(NAME debugger
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_SOURCE_DIR}/tests/test_debugger.py
+          $<TARGET_FILE:rill>)
