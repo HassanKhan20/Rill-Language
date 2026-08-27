@@ -35,7 +35,7 @@ enum class OpCode : uint8_t {
   Jump,          // Operand: two-byte forward offset.
   JumpIfFalse,   // Operand: two-byte forward offset. Does not pop.
   Loop,          // Operand: two-byte backward offset.
-  Print,  // Temporary: replaced by a native function once calls exist.
+  Call,   // Operand: argument count.
   Return,
 };
 

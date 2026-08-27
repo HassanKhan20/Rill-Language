@@ -52,7 +52,7 @@ const char* opCodeName(OpCode op) {
     case OpCode::Jump:        return "Jump";
     case OpCode::JumpIfFalse: return "JumpIfFalse";
     case OpCode::Loop:        return "Loop";
-    case OpCode::Print:    return "Print";
+    case OpCode::Call:     return "Call";
     case OpCode::Return:   return "Return";
   }
   return "Unknown";

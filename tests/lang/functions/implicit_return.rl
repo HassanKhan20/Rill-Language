@@ -1,0 +1,3 @@
+# expect: 3
+let add = fn(a, b) { a + b }
+print(add(1, 2))

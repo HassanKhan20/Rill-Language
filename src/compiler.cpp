@@ -12,8 +12,6 @@ Compiler* current = nullptr;
 
 namespace {
 
-Chunk* g_compilingChunk = nullptr;
-
 // How each opcode changes the stack depth. Opcodes carrying a variable effect
 // (CloseScope, Call) are handled at their emission site instead.
 int stackEffect(OpCode op) {
@@ -44,7 +42,6 @@ int stackEffect(OpCode op) {
     case OpCode::SetLocal:
     case OpCode::Negate:
     case OpCode::Not:
-    case OpCode::Print:
       return 0;
 
     // Variable or externally-managed effects: handled at the emission site.
@@ -53,6 +50,7 @@ int stackEffect(OpCode op) {
     case OpCode::Jump:
     case OpCode::JumpIfFalse:
     case OpCode::Loop:
+    case OpCode::Call:
     case OpCode::Return:
       return 0;
   }
@@ -66,7 +64,7 @@ bool identifiersEqual(const Token& a, const Token& b) {
 
 }  // namespace
 
-Chunk* currentChunk() { return g_compilingChunk; }
+Chunk* currentChunk() { return &current->function->chunk; }
 
 int stackDepth() { return current->stackDepth; }
 void setStackDepth(int depth) { current->stackDepth = depth; }
@@ -265,29 +263,71 @@ int resolveLocal(Compiler* compiler, Token name, bool* isMutableOut) {
   return -1;
 }
 
+void declareParam(Token name) {
+  // Parameters are already on the stack when the frame starts, so account for
+  // the slot before declaring the local that names it.
+  current->stackDepth++;
+  declareLocal(name, /*isMutable=*/true);
+}
+
+void emitCall(uint8_t argCount) {
+  emitByte(static_cast<uint8_t>(OpCode::Call));
+  emitByte(argCount);
+  // The callee and its arguments are replaced by a single result.
+  current->stackDepth -= argCount;
+}
+
+// --- Function compilers ---------------------------------------------------
+
+void initCompiler(Compiler* compiler, FunctionType type) {
+  compiler->enclosing = current;
+  compiler->function = newFunction();
+  compiler->type = type;
+  compiler->localCount = 0;
+  compiler->loop = nullptr;
+  // The body of a function is already a scope, so `let` inside it makes a
+  // local; at the top level scope depth 0 makes `let` define a global.
+  compiler->scopeDepth = type == FunctionType::Script ? 0 : 1;
+
+  current = compiler;
+
+  // Slot 0 holds the callee itself and is not addressable by name.
+  Local* local = &current->locals[current->localCount++];
+  local->depth = 0;
+  local->slot = 0;
+  local->isCaptured = false;
+  local->isMutable = false;
+  local->name.start = "";
+  local->name.length = 0;
+  current->stackDepth = 1;
+}
+
+ObjFunction* endCompiler() {
+  emitOp(OpCode::Return);
+  ObjFunction* function = current->function;
+  current = current->enclosing;
+  return function;
+}
+
 // --- Entry point ----------------------------------------------------------
 
-bool compile(const char* source, Chunk* chunk) {
+ObjFunction* compile(const char* source) {
   Lexer lexer(source);
   Compiler compiler;
 
   parser.lexer = &lexer;
   parser.hadError = false;
   parser.panicMode = false;
-  current = &compiler;
-  g_compilingChunk = chunk;
+  current = nullptr;
+  initCompiler(&compiler, FunctionType::Script);
 
   advance();
   exprList(TokenType::Eof);
   consume(TokenType::Eof, "expected end of input");
-  // The program's own value is not observable, so discard it.
-  emitOp(OpCode::Pop);
-  emitOp(OpCode::Return);
 
+  ObjFunction* function = endCompiler();
   parser.lexer = nullptr;
-  current = nullptr;
-  g_compilingChunk = nullptr;
-  return !parser.hadError;
+  return parser.hadError ? nullptr : function;
 }
 
 }  // namespace rill

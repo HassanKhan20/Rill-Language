@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "chunk.hpp"
 #include "value.hpp"
 
 namespace rill {
@@ -23,6 +24,23 @@ struct ObjString : Obj {
   uint32_t hash;
 };
 
+struct ObjFunction : Obj {
+  int arity;
+  int upvalueCount;
+  Chunk chunk;
+  ObjString* name;  // nullptr for the top-level script.
+};
+
+// A native returns false to signal a runtime error, leaving a message string
+// in *result.
+using NativeFn = bool (*)(int argCount, Value* args, Value* result);
+
+struct ObjNative : Obj {
+  NativeFn function;
+  ObjString* name;
+  int arity;  // -1 accepts any number of arguments.
+};
+
 inline bool isObjType(Value v, ObjType t) {
   return isObj(v) && asObj(v)->type == t;
 }
@@ -32,6 +50,19 @@ inline ObjString* asString(Value v) {
   return reinterpret_cast<ObjString*>(asObj(v));
 }
 inline const char* asCString(Value v) { return asString(v)->chars; }
+
+inline bool isFunction(Value v) { return isObjType(v, ObjType::Function); }
+inline ObjFunction* asFunction(Value v) {
+  return reinterpret_cast<ObjFunction*>(asObj(v));
+}
+
+inline bool isNative(Value v) { return isObjType(v, ObjType::Native); }
+inline ObjNative* asNative(Value v) {
+  return reinterpret_cast<ObjNative*>(asObj(v));
+}
+
+ObjFunction* newFunction();
+ObjNative* newNative(NativeFn function, const char* name, int arity);
 
 uint32_t hashString(const char* key, int length);
 

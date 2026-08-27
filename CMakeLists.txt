@@ -27,6 +27,7 @@ add_library(rill_core
   src/compiler.cpp
   src/parser.cpp
   src/vm.cpp
+  src/builtins.cpp
 )
 target_include_directories(rill_core PUBLIC src)
 target_compile_options(rill_core PUBLIC -Wall -Wextra -Werror)

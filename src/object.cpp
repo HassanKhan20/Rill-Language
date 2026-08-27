@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include "table.hpp"
 
@@ -43,7 +44,14 @@ void freeObject(Obj* object) {
       std::free(string);
       break;
     }
-    case ObjType::Function:
+    case ObjType::Function: {
+      // The Chunk holds std::vectors, so it needs its destructor run rather
+      // than a bare free().
+      auto* function = reinterpret_cast<ObjFunction*>(object);
+      function->~ObjFunction();
+      std::free(object);
+      break;
+    }
     case ObjType::Closure:
     case ObjType::Upvalue:
     case ObjType::Native:
@@ -92,14 +100,45 @@ void printObject(Value v) {
     case ObjType::String:
       std::printf("%s", asCString(v));
       break;
-    case ObjType::Function:
+    case ObjType::Function: {
+      ObjFunction* fn = asFunction(v);
+      if (fn->name == nullptr) {
+        std::printf("<script>");
+      } else {
+        std::printf("<fn %s>", fn->name->chars);
+      }
+      break;
+    }
+    case ObjType::Native:
+      std::printf("<native %s>", asNative(v)->name->chars);
+      break;
     case ObjType::Closure:
     case ObjType::Upvalue:
-    case ObjType::Native:
     case ObjType::Map:
       std::printf("<object>");
       break;
   }
+}
+
+ObjFunction* newFunction() {
+  auto* function = reinterpret_cast<ObjFunction*>(
+      allocateObject(sizeof(ObjFunction), ObjType::Function));
+  // allocateObject hands back raw memory, so the Chunk's vectors must be
+  // constructed in place before anything touches them.
+  new (&function->chunk) Chunk();
+  function->arity = 0;
+  function->upvalueCount = 0;
+  function->name = nullptr;
+  return function;
+}
+
+ObjNative* newNative(NativeFn fn, const char* name, int arity) {
+  auto* native = reinterpret_cast<ObjNative*>(
+      allocateObject(sizeof(ObjNative), ObjType::Native));
+  native->function = fn;
+  native->arity = arity;
+  native->name = copyString(name, static_cast<int>(std::strlen(name)));
+  return native;
 }
 
 void freeObjects() {

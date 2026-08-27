@@ -70,6 +70,8 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return jumpInstruction("JumpIfFalse", 1, chunk, offset);
     case OpCode::Loop:
       return jumpInstruction("Loop", -1, chunk, offset);
+    case OpCode::Call:
+      return byteInstruction("Call", chunk, offset);
     case OpCode::Nil:
     case OpCode::True:
     case OpCode::False:
@@ -84,7 +86,6 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
     case OpCode::Equal:
     case OpCode::Greater:
     case OpCode::Less:
-    case OpCode::Print:
     case OpCode::Return:
       return simpleInstruction(opCodeName(op), offset);
   }

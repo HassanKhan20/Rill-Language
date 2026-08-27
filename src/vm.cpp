@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "builtins.hpp"
 #include "compiler.hpp"
 #include "debug.hpp"
 #include "object.hpp"
@@ -14,9 +15,15 @@ namespace rill {
 
 VM vm;
 
-void VM::resetStack() { stackTop_ = stack_; }
+void VM::resetStack() {
+  stackTop_ = stack_;
+  frameCount_ = 0;
+}
 
-void VM::init() { resetStack(); }
+void VM::init() {
+  resetStack();
+  defineBuiltins(*this);
+}
 
 void VM::free() { freeObjects(); }
 
@@ -33,9 +40,75 @@ void VM::runtimeError(const char* format, ...) {
   va_end(args);
   std::fputs("\n", stderr);
 
-  size_t instruction = static_cast<size_t>(ip_ - chunk_->code.data()) - 1;
-  std::fprintf(stderr, "[line %d] in script\n", chunk_->lineAt(instruction));
+  // Innermost frame first, the way a stack trace reads.
+  for (int i = frameCount_ - 1; i >= 0; i--) {
+    CallFrame* frame = &frames_[i];
+    ObjFunction* function = frame->function;
+    size_t instruction =
+        static_cast<size_t>(frame->ip - function->chunk.code.data()) - 1;
+    std::fprintf(stderr, "[line %d] in ", function->chunk.lineAt(instruction));
+    if (function->name == nullptr) {
+      std::fprintf(stderr, "script\n");
+    } else {
+      std::fprintf(stderr, "fn '%s'\n", function->name->chars);
+    }
+  }
   resetStack();
+}
+
+bool VM::call(ObjFunction* function, int argCount) {
+  if (argCount != function->arity) {
+    runtimeError("expected %d arguments but got %d", function->arity, argCount);
+    return false;
+  }
+  if (frameCount_ == kFramesMax) {
+    runtimeError("stack overflow");
+    return false;
+  }
+
+  CallFrame* frame = &frames_[frameCount_++];
+  frame->function = function;
+  frame->ip = function->chunk.code.data();
+  // The callee sits just below its arguments and becomes slot 0.
+  frame->slots = stackTop_ - argCount - 1;
+  return true;
+}
+
+bool VM::callValue(Value callee, int argCount) {
+  if (isObj(callee)) {
+    switch (asObj(callee)->type) {
+      case ObjType::Function:
+        return call(asFunction(callee), argCount);
+
+      case ObjType::Native: {
+        ObjNative* native = asNative(callee);
+        if (native->arity >= 0 && native->arity != argCount) {
+          runtimeError("expected %d arguments but got %d", native->arity,
+                       argCount);
+          return false;
+        }
+        Value result = nilValue();
+        if (!native->function(argCount, stackTop_ - argCount, &result)) {
+          runtimeError("%s", isString(result) ? asCString(result)
+                                              : "error in native function");
+          return false;
+        }
+        stackTop_ -= argCount + 1;
+        push(result);
+        return true;
+      }
+
+      default:
+        break;
+    }
+  }
+  runtimeError("can only call functions");
+  return false;
+}
+
+void VM::defineNative(const char* name, NativeFn function, int arity) {
+  ObjString* key = copyString(name, static_cast<int>(std::strlen(name)));
+  globals_.set(key, objValue(newNative(function, name, arity)));
 }
 
 namespace {
@@ -47,20 +120,39 @@ bool bothStrings(Value a, Value b) { return isString(a) && isString(b); }
 }  // namespace
 
 InterpretResult VM::run() {
-#define READ_BYTE() (*ip_++)
-#define READ_CONSTANT() (chunk_->constants[READ_BYTE()])
-#define READ_SHORT() \
-  (ip_ += 2, static_cast<uint16_t>((ip_[-2] << 8) | ip_[-1]))
+  CallFrame* frame = &frames_[frameCount_ - 1];
+  // `ip` is cached in a local so the hot loop does not chase a pointer through
+  // the frame on every instruction. It MUST be written back to the frame
+  // before any call and reloaded after, or a callee will resume at the wrong
+  // instruction.
+  uint8_t* ip = frame->ip;
 
-#define BINARY_NUMERIC(makeValue, op)                          \
-  do {                                                         \
-    if (!isNumber(peek(0)) || !isNumber(peek(1))) {             \
-      runtimeError("operands must be numbers");                 \
-      return InterpretResult::RuntimeError;                     \
-    }                                                          \
-    double b = asNumber(pop());                                 \
-    double a = asNumber(pop());                                 \
-    push(makeValue(a op b));                                    \
+#define READ_BYTE() (*ip++)
+#define READ_CONSTANT() (frame->function->chunk.constants[READ_BYTE()])
+#define READ_SHORT() \
+  (ip += 2, static_cast<uint16_t>((ip[-2] << 8) | ip[-1]))
+#define STORE_IP() (frame->ip = ip)
+#define LOAD_FRAME()                     \
+  do {                                   \
+    frame = &frames_[frameCount_ - 1];   \
+    ip = frame->ip;                      \
+  } while (false)
+
+#define RUNTIME_ERROR(...)               \
+  do {                                   \
+    STORE_IP();                          \
+    runtimeError(__VA_ARGS__);           \
+    return InterpretResult::RuntimeError; \
+  } while (false)
+
+#define BINARY_NUMERIC(makeValue, op)               \
+  do {                                              \
+    if (!isNumber(peek(0)) || !isNumber(peek(1))) {  \
+      RUNTIME_ERROR("operands must be numbers");     \
+    }                                               \
+    double b = asNumber(pop());                     \
+    double a = asNumber(pop());                     \
+    push(makeValue(a op b));                        \
   } while (false)
 
   for (;;) {
@@ -72,8 +164,9 @@ InterpretResult VM::run() {
       std::printf(" ]");
     }
     std::printf("\n");
-    disassembleInstruction(*chunk_,
-                           static_cast<int>(ip_ - chunk_->code.data()));
+    disassembleInstruction(
+        frame->function->chunk,
+        static_cast<int>(ip - frame->function->chunk.code.data()));
 #endif
 
     auto instruction = static_cast<OpCode>(READ_BYTE());
@@ -95,8 +188,7 @@ InterpretResult VM::run() {
         ObjString* name = asString(READ_CONSTANT());
         Value value;
         if (!globals_.get(name, &value)) {
-          runtimeError("undefined variable '%s'", name->chars);
-          return InterpretResult::RuntimeError;
+          RUNTIME_ERROR("undefined variable '%s'", name->chars);
         }
         push(value);
         break;
@@ -105,51 +197,30 @@ InterpretResult VM::run() {
       case OpCode::SetGlobal: {
         ObjString* name = asString(READ_CONSTANT());
         // Assignment never creates a binding, so a miss is an error and the
-        // table entry it just created must be undone.
+        // entry it just created must be undone.
         if (globals_.set(name, peek(0))) {
           globals_.remove(name);
-          runtimeError("undefined variable '%s'", name->chars);
-          return InterpretResult::RuntimeError;
+          RUNTIME_ERROR("undefined variable '%s'", name->chars);
         }
         break;
       }
 
       case OpCode::GetLocal: {
         uint8_t slot = READ_BYTE();
-        push(stack_[slot]);
+        push(frame->slots[slot]);
         break;
       }
 
       case OpCode::SetLocal: {
         uint8_t slot = READ_BYTE();
         // Assignment is an expression, so the value stays on the stack.
-        stack_[slot] = peek(0);
+        frame->slots[slot] = peek(0);
         break;
       }
 
       case OpCode::PopN: {
         uint8_t count = READ_BYTE();
         stackTop_ -= count;
-        break;
-      }
-
-      case OpCode::Jump: {
-        uint16_t offset = READ_SHORT();
-        ip_ += offset;
-        break;
-      }
-
-      case OpCode::JumpIfFalse: {
-        uint16_t offset = READ_SHORT();
-        // Deliberately does not pop: the compiler emits an explicit Pop on
-        // each path, which is what lets `and`/`or` yield an operand.
-        if (isFalsey(peek(0))) ip_ += offset;
-        break;
-      }
-
-      case OpCode::Loop: {
-        uint16_t offset = READ_SHORT();
-        ip_ -= offset;
         break;
       }
 
@@ -162,12 +233,31 @@ InterpretResult VM::run() {
         break;
       }
 
+      case OpCode::Jump: {
+        uint16_t offset = READ_SHORT();
+        ip += offset;
+        break;
+      }
+
+      case OpCode::JumpIfFalse: {
+        uint16_t offset = READ_SHORT();
+        // Deliberately does not pop: the compiler emits an explicit Pop on
+        // each path, which is what lets `and`/`or` yield an operand.
+        if (isFalsey(peek(0))) ip += offset;
+        break;
+      }
+
+      case OpCode::Loop: {
+        uint16_t offset = READ_SHORT();
+        ip -= offset;
+        break;
+      }
+
       case OpCode::Not: push(boolValue(isFalsey(pop()))); break;
 
       case OpCode::Negate:
         if (!isNumber(peek(0))) {
-          runtimeError("operand must be a number");
-          return InterpretResult::RuntimeError;
+          RUNTIME_ERROR("operand must be a number");
         }
         push(numberValue(-asNumber(pop())));
         break;
@@ -192,8 +282,7 @@ InterpretResult VM::run() {
           double a = asNumber(pop());
           push(numberValue(a + b));
         } else {
-          runtimeError("operands must be two numbers or two strings");
-          return InterpretResult::RuntimeError;
+          RUNTIME_ERROR("operands must be two numbers or two strings");
         }
         break;
       }
@@ -204,8 +293,7 @@ InterpretResult VM::run() {
 
       case OpCode::Modulo: {
         if (!isNumber(peek(0)) || !isNumber(peek(1))) {
-          runtimeError("operands must be numbers");
-          return InterpretResult::RuntimeError;
+          RUNTIME_ERROR("operands must be numbers");
         }
         double b = asNumber(pop());
         double a = asNumber(pop());
@@ -222,36 +310,48 @@ InterpretResult VM::run() {
       case OpCode::Greater: BINARY_NUMERIC(boolValue, >); break;
       case OpCode::Less:    BINARY_NUMERIC(boolValue, <); break;
 
-      case OpCode::Print:
-        printValue(pop());
-        std::printf("\n");
-        // `print(x)` is an expression like any other and must leave exactly
-        // one value behind. It becomes a native returning nil in a later
-        // task; this keeps the invariant true in the meantime.
-        push(nilValue());
+      case OpCode::Call: {
+        int argCount = READ_BYTE();
+        STORE_IP();
+        if (!callValue(peek(argCount), argCount)) {
+          return InterpretResult::RuntimeError;
+        }
+        LOAD_FRAME();
         break;
+      }
 
-      case OpCode::Return:
-        return InterpretResult::Ok;
+      case OpCode::Return: {
+        Value result = pop();
+        frameCount_--;
+        if (frameCount_ == 0) {
+          pop();  // The script function itself.
+          return InterpretResult::Ok;
+        }
+        // Discard the callee's whole frame, then hand back the result.
+        stackTop_ = frame->slots;
+        push(result);
+        LOAD_FRAME();
+        break;
+      }
     }
   }
 
 #undef BINARY_NUMERIC
+#undef RUNTIME_ERROR
+#undef LOAD_FRAME
+#undef STORE_IP
 #undef READ_SHORT
 #undef READ_CONSTANT
 #undef READ_BYTE
 }
 
 InterpretResult VM::interpret(const char* source) {
-  Chunk chunk;
-  if (!compile(source, &chunk)) return InterpretResult::CompileError;
+  ObjFunction* function = compile(source);
+  if (function == nullptr) return InterpretResult::CompileError;
 
-  chunk_ = &chunk;
-  ip_ = chunk_->code.data();
-  InterpretResult result = run();
-  chunk_ = nullptr;
-  ip_ = nullptr;
-  return result;
+  push(objValue(function));
+  call(function, 0);
+  return run();
 }
 
 }  // namespace rill

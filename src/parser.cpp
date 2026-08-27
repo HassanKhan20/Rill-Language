@@ -129,19 +129,80 @@ void namedVariable(Token name, bool canAssign) {
   }
 }
 
-// Temporary: `print` is recognised syntactically until native functions land,
-// at which point this becomes an ordinary call and OpCode::Print disappears.
 void identifier(bool canAssign) {
-  if (parser.previous.length == 5 &&
-      std::memcmp(parser.previous.start, "print", 5) == 0) {
-    consume(TokenType::LeftParen, "expected '(' after 'print'");
-    expression();
-    consume(TokenType::RightParen, "expected ')' after argument");
-    emitOp(OpCode::Print);
-    return;
-  }
   namedVariable(parser.previous, canAssign);
 }
+
+// Function literals are anonymous, but a function bound straight to a name is
+// almost always thought of by that name, so `declaration` leaves the binding
+// name here for the literal to adopt. It exists purely for error messages.
+const Token* g_pendingFnName = nullptr;
+
+// A function literal. The body is a block, so its final expression is the
+// return value; `return` exists for early exit.
+void fnExpr(bool) {
+  const Token* inferredName = g_pendingFnName;
+  g_pendingFnName = nullptr;
+
+  Compiler compiler;
+  initCompiler(&compiler, FunctionType::Function);
+
+  if (inferredName != nullptr) {
+    current->function->name =
+        copyString(inferredName->start, inferredName->length);
+  } else {
+    current->function->name = copyString("<anonymous>", 11);
+  }
+
+  consume(TokenType::LeftParen, "expected '(' after 'fn'");
+  if (!check(TokenType::RightParen)) {
+    do {
+      current->function->arity++;
+      if (current->function->arity > 255) {
+        errorAtCurrent("cannot have more than 255 parameters");
+      }
+      consume(TokenType::Identifier, "expected a parameter name");
+      declareParam(parser.previous);
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightParen, "expected ')' after parameters");
+
+  consume(TokenType::LeftBrace, "expected '{' before function body");
+  exprList(TokenType::RightBrace);
+  consume(TokenType::RightBrace, "expected '}' after function body");
+
+  ObjFunction* function = endCompiler();
+  emitConstant(objValue(function));
+}
+
+// `return <expr>` or a bare `return` yielding nil.
+void returnExpr(bool) {
+  int before = stackDepth();
+  if (check(TokenType::Semicolon) || check(TokenType::RightBrace)) {
+    emitOp(OpCode::Nil);
+  } else {
+    expression();
+  }
+  emitOp(OpCode::Return);
+  // Control never falls through, but `return` is an expression and the
+  // surrounding sequence accounts for a value here.
+  setStackDepth(before + 1);
+}
+
+uint8_t argumentList() {
+  uint8_t count = 0;
+  if (!check(TokenType::RightParen)) {
+    do {
+      expression();
+      if (count == 255) error("cannot have more than 255 arguments");
+      count++;
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightParen, "expected ')' after arguments");
+  return count;
+}
+
+void call(bool) { emitCall(argumentList()); }
 
 // `let` and `var` are prefix expressions, not statements: a declaration is an
 // expression that yields nil.
@@ -152,7 +213,9 @@ void declaration(bool) {
   Token name = parser.previous;
 
   consume(TokenType::Equal, "expected '=' in binding");
+  g_pendingFnName = &name;
   expression();
+  g_pendingFnName = nullptr;
 
   if (current->scopeDepth > 0) {
     // A local keeps the slot its initializer just landed on.
@@ -299,7 +362,7 @@ void orExpr(bool) {
 
 // clang-format off
 const ParseRule kRules[] = {
-    /* LeftParen    */ {grouping, nullptr, Prec::None},
+    /* LeftParen    */ {grouping, call,    Prec::Call},
     /* RightParen   */ {nullptr,  nullptr, Prec::None},
     /* LeftBrace    */ {block,    nullptr, Prec::None},
     /* RightBrace   */ {nullptr,  nullptr, Prec::None},
@@ -328,7 +391,7 @@ const ParseRule kRules[] = {
     /* Underscore   */ {nullptr,  nullptr, Prec::None},
     /* Let          */ {declaration, nullptr, Prec::None},
     /* Var          */ {declaration, nullptr, Prec::None},
-    /* Fn           */ {nullptr,  nullptr, Prec::None},
+    /* Fn           */ {fnExpr,   nullptr, Prec::None},
     /* If           */ {ifExpr,   nullptr, Prec::None},
     /* Else         */ {nullptr,  nullptr, Prec::None},
     /* While        */ {whileExpr, nullptr, Prec::None},
@@ -338,7 +401,7 @@ const ParseRule kRules[] = {
     /* True         */ {literal,  nullptr, Prec::None},
     /* False        */ {literal,  nullptr, Prec::None},
     /* Nil          */ {literal,  nullptr, Prec::None},
-    /* Return       */ {nullptr,  nullptr, Prec::None},
+    /* Return       */ {returnExpr, nullptr, Prec::None},
     /* Break        */ {breakExpr, nullptr, Prec::None},
     /* Continue     */ {continueExpr, nullptr, Prec::None},
     /* Error        */ {nullptr,  nullptr, Prec::None},

@@ -5,6 +5,7 @@
 #include "chunk.hpp"
 #include "common.hpp"
 #include "lexer.hpp"
+#include "object.hpp"
 #include "value.hpp"
 
 namespace rill {
@@ -41,12 +42,16 @@ struct Local {
   bool isMutable;
 };
 
+enum class FunctionType { Script, Function };
+
 // Because blocks are expressions, a block can begin with temporaries already
 // on the stack, so a local's slot is NOT its index in `locals`. The compiler
 // therefore tracks the stack depth it is emitting at, and a local's slot is
 // the depth its initializer landed on.
 struct Compiler {
   Compiler* enclosing = nullptr;
+  ObjFunction* function = nullptr;
+  FunctionType type = FunctionType::Script;
   Local locals[kUint8Count];
   int localCount = 0;
   int scopeDepth = 0;
@@ -56,7 +61,16 @@ struct Compiler {
 
 extern Compiler* current;
 
-bool compile(const char* source, Chunk* chunk);
+// Compiles a whole program into a synthetic top-level function. Returns
+// nullptr if any compile error was reported.
+ObjFunction* compile(const char* source);
+
+// Pushes a new function compiler. Slot 0 of every frame is reserved for the
+// callee itself, so locals start at slot 1.
+void initCompiler(Compiler* compiler, FunctionType type);
+
+// Emits the implicit return and pops the compiler, returning its function.
+ObjFunction* endCompiler();
 
 // --- Token stream ---------------------------------------------------------
 
@@ -98,6 +112,12 @@ void setStackDepth(int depth);
 
 // Discards `count` values from the top of the stack.
 void emitPopN(int count);
+
+// Emits a call, accounting for the arguments it consumes.
+void emitCall(uint8_t argCount);
+
+// Declares a parameter, which arrives on the stack already.
+void declareParam(Token name);
 
 // --- Jumps ----------------------------------------------------------------
 
