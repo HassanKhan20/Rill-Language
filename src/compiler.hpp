@@ -22,6 +22,17 @@ struct Parser {
 
 extern Parser parser;
 
+// One per enclosing `while`. `break` and `continue` unwind the stack to
+// `baseDepth` before jumping, since the loop's entry and exit points both
+// expect exactly that depth.
+struct LoopContext {
+  LoopContext* enclosing = nullptr;
+  int startOffset = 0;   // Where `continue` jumps back to.
+  int baseDepth = 0;     // Stack depth at loop entry.
+  int breakJumps[kUint8Count];
+  int breakCount = 0;
+};
+
 struct Local {
   Token name;
   int depth;       // Scope depth, or -1 while the initializer is compiling.
@@ -40,6 +51,7 @@ struct Compiler {
   int localCount = 0;
   int scopeDepth = 0;
   int stackDepth = 0;
+  LoopContext* loop = nullptr;
 };
 
 extern Compiler* current;
@@ -83,6 +95,19 @@ uint8_t makeConstant(Value value);
 // execute linearly.
 int stackDepth();
 void setStackDepth(int depth);
+
+// Discards `count` values from the top of the stack.
+void emitPopN(int count);
+
+// --- Jumps ----------------------------------------------------------------
+
+// Emits a jump with a placeholder offset and returns the offset of that
+// placeholder, to be handed to patchJump once the target is known.
+int emitJump(OpCode op);
+void patchJump(int offset);
+
+// Emits a backward jump to an already-known offset.
+void emitLoop(int loopStart);
 
 // --- Scopes and locals ----------------------------------------------------
 

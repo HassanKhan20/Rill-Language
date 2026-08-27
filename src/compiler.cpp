@@ -47,7 +47,12 @@ int stackEffect(OpCode op) {
     case OpCode::Print:
       return 0;
 
+    // Variable or externally-managed effects: handled at the emission site.
+    case OpCode::PopN:
     case OpCode::CloseScope:
+    case OpCode::Jump:
+    case OpCode::JumpIfFalse:
+    case OpCode::Loop:
     case OpCode::Return:
       return 0;
   }
@@ -153,6 +158,50 @@ uint8_t makeConstant(Value value) {
 
 void emitConstant(Value value) {
   emitOpArg(OpCode::Constant, makeConstant(value));
+}
+
+void emitPopN(int count) {
+  if (count <= 0) return;
+  if (count == 1) {
+    emitOp(OpCode::Pop);
+    return;
+  }
+  emitByte(static_cast<uint8_t>(OpCode::PopN));
+  emitByte(static_cast<uint8_t>(count));
+  current->stackDepth -= count;
+}
+
+// --- Jumps ----------------------------------------------------------------
+
+int emitJump(OpCode op) {
+  emitByte(static_cast<uint8_t>(op));
+  emitByte(0xff);
+  emitByte(0xff);
+  return static_cast<int>(currentChunk()->code.size()) - 2;
+}
+
+void patchJump(int offset) {
+  // -2 accounts for the two offset bytes the VM has already consumed.
+  int jump = static_cast<int>(currentChunk()->code.size()) - offset - 2;
+  if (jump > UINT16_MAX) {
+    error("too much code to jump over");
+    return;
+  }
+  currentChunk()->code[static_cast<size_t>(offset)] =
+      static_cast<uint8_t>((jump >> 8) & 0xff);
+  currentChunk()->code[static_cast<size_t>(offset) + 1] =
+      static_cast<uint8_t>(jump & 0xff);
+}
+
+void emitLoop(int loopStart) {
+  emitByte(static_cast<uint8_t>(OpCode::Loop));
+  int offset = static_cast<int>(currentChunk()->code.size()) - loopStart + 2;
+  if (offset > UINT16_MAX) {
+    error("loop body too large");
+    return;
+  }
+  emitByte(static_cast<uint8_t>((offset >> 8) & 0xff));
+  emitByte(static_cast<uint8_t>(offset & 0xff));
 }
 
 // --- Scopes and locals ----------------------------------------------------

@@ -49,6 +49,8 @@ bool bothStrings(Value a, Value b) { return isString(a) && isString(b); }
 InterpretResult VM::run() {
 #define READ_BYTE() (*ip_++)
 #define READ_CONSTANT() (chunk_->constants[READ_BYTE()])
+#define READ_SHORT() \
+  (ip_ += 2, static_cast<uint16_t>((ip_[-2] << 8) | ip_[-1]))
 
 #define BINARY_NUMERIC(makeValue, op)                          \
   do {                                                         \
@@ -122,6 +124,32 @@ InterpretResult VM::run() {
         uint8_t slot = READ_BYTE();
         // Assignment is an expression, so the value stays on the stack.
         stack_[slot] = peek(0);
+        break;
+      }
+
+      case OpCode::PopN: {
+        uint8_t count = READ_BYTE();
+        stackTop_ -= count;
+        break;
+      }
+
+      case OpCode::Jump: {
+        uint16_t offset = READ_SHORT();
+        ip_ += offset;
+        break;
+      }
+
+      case OpCode::JumpIfFalse: {
+        uint16_t offset = READ_SHORT();
+        // Deliberately does not pop: the compiler emits an explicit Pop on
+        // each path, which is what lets `and`/`or` yield an operand.
+        if (isFalsey(peek(0))) ip_ += offset;
+        break;
+      }
+
+      case OpCode::Loop: {
+        uint16_t offset = READ_SHORT();
+        ip_ -= offset;
         break;
       }
 
@@ -209,6 +237,7 @@ InterpretResult VM::run() {
   }
 
 #undef BINARY_NUMERIC
+#undef READ_SHORT
 #undef READ_CONSTANT
 #undef READ_BYTE
 }

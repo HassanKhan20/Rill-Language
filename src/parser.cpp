@@ -171,12 +171,130 @@ void declaration(bool) {
 }
 
 // A brace-delimited block is an expression whose value is its final
-// expression.
-void block(bool) {
+// expression. Assumes the opening brace has already been consumed.
+void blockBody() {
   beginScope();
   exprList(TokenType::RightBrace);
   consume(TokenType::RightBrace, "expected '}' after block");
   endScope();
+}
+
+void block(bool) { blockBody(); }
+
+// if/else is an expression. Both arms must leave exactly one value, and the
+// compiler must reset its depth tracking at the branch point because it emits
+// linearly while the VM does not execute linearly.
+void ifExpr(bool) {
+  int base = stackDepth();
+
+  expression();  // Condition; depth is base + 1.
+  int thenJump = emitJump(OpCode::JumpIfFalse);
+
+  emitOp(OpCode::Pop);  // Discard the condition on the taken path.
+  consume(TokenType::LeftBrace, "expected '{' after if condition");
+  blockBody();  // depth == base + 1
+  int elseJump = emitJump(OpCode::Jump);
+
+  patchJump(thenJump);
+  // The untaken path arrives here with the condition still on the stack.
+  setStackDepth(base + 1);
+  emitOp(OpCode::Pop);
+
+  if (match(TokenType::Else)) {
+    if (match(TokenType::If)) {
+      ifExpr(false);
+    } else {
+      consume(TokenType::LeftBrace, "expected '{' or 'if' after 'else'");
+      blockBody();
+    }
+  } else {
+    // An if without an else yields nil.
+    emitOp(OpCode::Nil);
+  }
+
+  patchJump(elseJump);
+}
+
+// `while` always yields nil. Its body's value is discarded each iteration.
+void whileExpr(bool) {
+  int base = stackDepth();
+  int loopStart = static_cast<int>(currentChunk()->code.size());
+
+  LoopContext loop;
+  loop.enclosing = current->loop;
+  loop.startOffset = loopStart;
+  loop.baseDepth = base;
+  current->loop = &loop;
+
+  expression();  // Condition; depth base + 1.
+  int exitJump = emitJump(OpCode::JumpIfFalse);
+  emitOp(OpCode::Pop);
+
+  consume(TokenType::LeftBrace, "expected '{' after while condition");
+  blockBody();          // depth base + 1
+  emitOp(OpCode::Pop);  // The body's value is discarded.
+  emitLoop(loopStart);
+
+  patchJump(exitJump);
+  setStackDepth(base + 1);
+  emitOp(OpCode::Pop);  // Discard the condition. depth == base
+
+  // `break` jumps here, with the stack already unwound to base.
+  for (int i = 0; i < loop.breakCount; i++) patchJump(loop.breakJumps[i]);
+
+  emitOp(OpCode::Nil);
+  current->loop = loop.enclosing;
+}
+
+void breakExpr(bool) {
+  LoopContext* loop = current->loop;
+  if (loop == nullptr) {
+    error("'break' outside of a loop");
+    return;
+  }
+  if (loop->breakCount == kUint8Count) {
+    error("too many 'break' expressions in one loop");
+    return;
+  }
+
+  int before = stackDepth();
+  emitPopN(before - loop->baseDepth);
+  loop->breakJumps[loop->breakCount++] = emitJump(OpCode::Jump);
+  // Control never reaches the following code, but `break` is an expression
+  // and the surrounding sequence accounts for a value here.
+  setStackDepth(before + 1);
+}
+
+void continueExpr(bool) {
+  LoopContext* loop = current->loop;
+  if (loop == nullptr) {
+    error("'continue' outside of a loop");
+    return;
+  }
+
+  int before = stackDepth();
+  emitPopN(before - loop->baseDepth);
+  emitLoop(loop->startOffset);
+  setStackDepth(before + 1);
+}
+
+// `and` and `or` yield one of their operands rather than a coerced boolean,
+// so the short-circuit path simply leaves the left operand in place.
+void andExpr(bool) {
+  int endJump = emitJump(OpCode::JumpIfFalse);
+  emitOp(OpCode::Pop);
+  parsePrecedence(Prec::And);
+  patchJump(endJump);
+}
+
+void orExpr(bool) {
+  int elseJump = emitJump(OpCode::JumpIfFalse);
+  int endJump = emitJump(OpCode::Jump);
+
+  patchJump(elseJump);
+  emitOp(OpCode::Pop);
+  parsePrecedence(Prec::Or);
+  patchJump(endJump);
 }
 
 // clang-format off
@@ -211,18 +329,18 @@ const ParseRule kRules[] = {
     /* Let          */ {declaration, nullptr, Prec::None},
     /* Var          */ {declaration, nullptr, Prec::None},
     /* Fn           */ {nullptr,  nullptr, Prec::None},
-    /* If           */ {nullptr,  nullptr, Prec::None},
+    /* If           */ {ifExpr,   nullptr, Prec::None},
     /* Else         */ {nullptr,  nullptr, Prec::None},
-    /* While        */ {nullptr,  nullptr, Prec::None},
+    /* While        */ {whileExpr, nullptr, Prec::None},
     /* Match        */ {nullptr,  nullptr, Prec::None},
-    /* And          */ {nullptr,  nullptr, Prec::None},
-    /* Or           */ {nullptr,  nullptr, Prec::None},
+    /* And          */ {nullptr,  andExpr, Prec::And},
+    /* Or           */ {nullptr,  orExpr,  Prec::Or},
     /* True         */ {literal,  nullptr, Prec::None},
     /* False        */ {literal,  nullptr, Prec::None},
     /* Nil          */ {literal,  nullptr, Prec::None},
     /* Return       */ {nullptr,  nullptr, Prec::None},
-    /* Break        */ {nullptr,  nullptr, Prec::None},
-    /* Continue     */ {nullptr,  nullptr, Prec::None},
+    /* Break        */ {breakExpr, nullptr, Prec::None},
+    /* Continue     */ {continueExpr, nullptr, Prec::None},
     /* Error        */ {nullptr,  nullptr, Prec::None},
     /* Eof          */ {nullptr,  nullptr, Prec::None},
 };
@@ -275,7 +393,13 @@ void exprList(TokenType terminator) {
 
     if (check(terminator) || check(TokenType::Eof)) {
       // A trailing ';' discarded the last value, so the sequence yields nil.
-      if (discarded) emitOp(OpCode::Nil);
+      // The discarded value must actually be popped: leaving it behind strands
+      // a temporary between the scope's locals and the block result, which
+      // makes CloseScope remove the wrong slots.
+      if (discarded) {
+        emitOp(OpCode::Pop);
+        emitOp(OpCode::Nil);
+      }
       return;
     }
 

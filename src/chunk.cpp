@@ -32,6 +32,7 @@ const char* opCodeName(OpCode op) {
     case OpCode::True:     return "True";
     case OpCode::False:    return "False";
     case OpCode::Pop:      return "Pop";
+    case OpCode::PopN:         return "PopN";
     case OpCode::CloseScope:   return "CloseScope";
     case OpCode::DefineGlobal: return "DefineGlobal";
     case OpCode::GetGlobal:    return "GetGlobal";
@@ -48,6 +49,9 @@ const char* opCodeName(OpCode op) {
     case OpCode::Equal:    return "Equal";
     case OpCode::Greater:  return "Greater";
     case OpCode::Less:     return "Less";
+    case OpCode::Jump:        return "Jump";
+    case OpCode::JumpIfFalse: return "JumpIfFalse";
+    case OpCode::Loop:        return "Loop";
     case OpCode::Print:    return "Print";
     case OpCode::Return:   return "Return";
   }

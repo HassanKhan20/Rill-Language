@@ -15,6 +15,7 @@ enum class OpCode : uint8_t {
   True,
   False,
   Pop,
+  PopN,        // Operand: how many values to discard from the top.
   CloseScope,  // Operand: how many slots to discard from under the top value.
   DefineGlobal,
   GetGlobal,
@@ -31,6 +32,9 @@ enum class OpCode : uint8_t {
   Equal,
   Greater,
   Less,
+  Jump,          // Operand: two-byte forward offset.
+  JumpIfFalse,   // Operand: two-byte forward offset. Does not pop.
+  Loop,          // Operand: two-byte backward offset.
   Print,  // Temporary: replaced by a native function once calls exist.
   Return,
 };

@@ -12,6 +12,15 @@ int byteInstruction(const char* name, const Chunk& chunk, int offset) {
   return offset + 2;
 }
 
+int jumpInstruction(const char* name, int sign, const Chunk& chunk,
+                    int offset) {
+  auto jump = static_cast<uint16_t>(
+      (chunk.code[static_cast<size_t>(offset) + 1] << 8) |
+      chunk.code[static_cast<size_t>(offset) + 2]);
+  std::printf("%-16s %4d -> %d\n", name, offset, offset + 3 + sign * jump);
+  return offset + 3;
+}
+
 int simpleInstruction(const char* name, int offset) {
   std::printf("%s\n", name);
   return offset + 1;
@@ -53,6 +62,14 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return byteInstruction("SetLocal", chunk, offset);
     case OpCode::CloseScope:
       return byteInstruction("CloseScope", chunk, offset);
+    case OpCode::PopN:
+      return byteInstruction("PopN", chunk, offset);
+    case OpCode::Jump:
+      return jumpInstruction("Jump", 1, chunk, offset);
+    case OpCode::JumpIfFalse:
+      return jumpInstruction("JumpIfFalse", 1, chunk, offset);
+    case OpCode::Loop:
+      return jumpInstruction("Loop", -1, chunk, offset);
     case OpCode::Nil:
     case OpCode::True:
     case OpCode::False:
