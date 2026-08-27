@@ -32,3 +32,17 @@ add_executable(rill src/main.cpp)
 target_link_libraries(rill PRIVATE rill_core)
 
 enable_testing()
+
+add_executable(rill_tests
+  tests/unit/main.cpp
+)
+target_link_libraries(rill_tests PRIVATE rill_core)
+target_include_directories(rill_tests PRIVATE tests/unit)
+add_test(NAME unit COMMAND rill_tests)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME behavior
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_SOURCE_DIR}/tests/run_behavior_tests.py
+          $<TARGET_FILE:rill>
+          ${CMAKE_SOURCE_DIR}/tests/lang)
