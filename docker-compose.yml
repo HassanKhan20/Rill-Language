@@ -1,0 +1,7 @@
+services:
+  dev:
+    build: .
+    image: rill-dev
+    volumes:
+      - .:/work
+    working_dir: /work
