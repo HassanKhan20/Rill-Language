@@ -29,6 +29,10 @@ class VM {
   // Binds a native function to a global name. Used by builtins.cpp.
   void defineNative(const char* name, NativeFn function, int arity);
 
+  // The collector needs to walk the stack, frames, globals, and open
+  // upvalues; markVMRoots is the only outside code that may.
+  friend void markVMRoots();
+
  private:
   InterpretResult run();
   Value peek(int distance) const;
@@ -56,5 +60,8 @@ class VM {
 };
 
 extern VM vm;
+
+// Enumerates the VM's roots for the collector.
+void markVMRoots();
 
 }  // namespace rill

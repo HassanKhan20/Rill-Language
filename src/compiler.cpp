@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "gc.hpp"
 #include "parser.hpp"
 
 namespace rill {
@@ -387,6 +388,16 @@ ObjFunction* endCompiler() {
   ObjFunction* function = current->function;
   current = current->enclosing;
   return function;
+}
+
+// A function under construction is reachable from nothing but its compiler,
+// and compiling it allocates constantly, so the whole compiler chain is a
+// root. Missing this is the classic from-scratch-collector bug.
+void markCompilerRoots() {
+  for (Compiler* compiler = current; compiler != nullptr;
+       compiler = compiler->enclosing) {
+    markObject(reinterpret_cast<Obj*>(compiler->function));
+  }
 }
 
 // --- Entry point ----------------------------------------------------------

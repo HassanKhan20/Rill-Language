@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "chunk.hpp"
+#include "table.hpp"
 #include "value.hpp"
 
 namespace rill {
@@ -57,6 +58,13 @@ struct ObjClosure : Obj {
   int upvalueCount;
 };
 
+// Rill has no classes. An object is a map with an optional delegation link:
+// lookup walks the prototype chain, assignment always writes to the receiver.
+struct ObjMap : Obj {
+  Table fields;
+  ObjMap* prototype;
+};
+
 inline bool isObjType(Value v, ObjType t) {
   return isObj(v) && asObj(v)->type == t;
 }
@@ -84,8 +92,15 @@ inline ObjClosure* asClosure(Value v) {
 
 ObjFunction* newFunction();
 ObjNative* newNative(NativeFn function, const char* name, int arity);
+inline bool isMap(Value v) { return isObjType(v, ObjType::Map); }
+inline ObjMap* asMap(Value v) { return reinterpret_cast<ObjMap*>(asObj(v)); }
+
 ObjClosure* newClosure(ObjFunction* function);
 ObjUpvalue* newUpvalue(Value* slot);
+ObjMap* newMap(ObjMap* prototype);
+
+// Walks the prototype chain. Returns false if no link defines `name`.
+bool mapGet(ObjMap* map, ObjString* name, Value* out);
 
 uint32_t hashString(const char* key, int length);
 
@@ -97,6 +112,14 @@ ObjString* copyString(const char* chars, int length);
 ObjString* takeString(char* chars, int length);
 
 void printObject(Value v);
+
+// The intrusive allocation list and the weak intern table. The collector owns
+// both conceptually; they live here because this is where objects are made.
+extern Obj* g_objects;
+extern Table g_strings;
+
+// Releases one object. Public because the collector's sweep phase calls it.
+void freeObject(Obj* object);
 
 // Frees every object on the allocation list. Called at VM teardown so that a
 // valgrind run reports only genuine leaks.

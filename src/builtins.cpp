@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 
+#include "gc.hpp"
 #include "object.hpp"
 #include "value.hpp"
 #include "vm.hpp"
@@ -89,9 +90,25 @@ bool nativeNum(int, Value* args, Value* result) {
   return true;
 }
 
+// Forces a collection and reports the bytes still live afterwards. Exists so
+// the collector's behaviour is observable from a test and measurable from a
+// benchmark.
+bool nativeGc(int, Value*, Value* result) {
+  collectGarbage();
+  *result = numberValue(static_cast<double>(bytesAllocated()));
+  return true;
+}
+
+bool nativeGcCount(int, Value*, Value* result) {
+  *result = numberValue(static_cast<double>(collectionCount()));
+  return true;
+}
+
 }  // namespace
 
 void defineBuiltins(VM& vm) {
+  vm.defineNative("gc", nativeGc, 0);
+  vm.defineNative("gcCount", nativeGcCount, 0);
   vm.defineNative("print", nativePrint, 1);
   vm.defineNative("clock", nativeClock, 0);
   vm.defineNative("sqrt", nativeSqrt, 1);

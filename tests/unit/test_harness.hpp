@@ -6,6 +6,9 @@
 
 #include <cstdio>
 #include <functional>
+
+#include "object.hpp"
+#include "value.hpp"
 #include <string>
 #include <vector>
 
@@ -79,3 +82,25 @@ inline int runAll() {
                                 "CHECK_EQ failed: " #a " != " #b);     \
     }                                                                  \
   } while (false)
+
+// --- Keeping test objects alive -------------------------------------------
+//
+// Objects held only in a test's local variables are invisible to the
+// collector. Under RILL_GC_STRESS every allocation collects, so a test that
+// allocates twice loses the first object unless it says otherwise. keep()
+// registers a value as a root for the rest of the run.
+namespace rilltest {
+
+std::vector<::rill::Value>& roots();
+
+inline ::rill::Value keep(::rill::Value v) {
+  roots().push_back(v);
+  return v;
+}
+
+inline ::rill::ObjString* keepString(::rill::ObjString* s) {
+  roots().push_back(::rill::objValue(reinterpret_cast<::rill::Obj*>(s)));
+  return s;
+}
+
+}  // namespace rilltest

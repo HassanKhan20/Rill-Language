@@ -13,8 +13,8 @@ TEST(strings_with_equal_contents_are_the_same_object) {
 }
 
 TEST(strings_with_different_contents_are_distinct) {
-  ObjString* a = copyString("hello", 5);
-  ObjString* b = copyString("world", 5);
+  ObjString* a = rilltest::keepString(copyString("hello", 5));
+  ObjString* b = rilltest::keepString(copyString("world", 5));
   CHECK(a != b);
 }
 
@@ -38,7 +38,7 @@ TEST(embedded_nul_does_not_truncate_the_string) {
 }
 
 TEST(take_string_reuses_an_interned_copy) {
-  ObjString* first = copyString("shared", 6);
+  ObjString* first = rilltest::keepString(copyString("shared", 6));
   auto* buf = static_cast<char*>(std::malloc(7));
   std::memcpy(buf, "shared", 7);
   // takeString owns buf and must free it on an intern hit; running this under
@@ -53,6 +53,6 @@ TEST(hash_is_stable_for_equal_contents) {
 
 TEST(objects_are_threaded_onto_the_allocation_list) {
   int before = liveObjectCount();
-  copyString("a-brand-new-string", 18);
+  rilltest::keepString(copyString("a-brand-new-string", 18));
   CHECK(liveObjectCount() > before);
 }

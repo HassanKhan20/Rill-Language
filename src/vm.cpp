@@ -8,6 +8,7 @@
 
 #include "builtins.hpp"
 #include "compiler.hpp"
+#include "gc.hpp"
 #include "debug.hpp"
 #include "object.hpp"
 
@@ -141,7 +142,32 @@ void VM::closeUpvalues(Value* last) {
 
 void VM::defineNative(const char* name, NativeFn function, int arity) {
   ObjString* key = copyString(name, static_cast<int>(std::strlen(name)));
-  globals_.set(key, objValue(newNative(function, name, arity)));
+  // `key` lives only in this local until the set() below, and newNative
+  // allocates in between.
+  pushTempRoot(objValue(key));
+  Value native = objValue(newNative(function, name, arity));
+  popTempRoot();
+  globals_.set(key, native);
+}
+
+// The collector cannot see inside the VM, so the VM enumerates its own roots:
+// everything live on the value stack, every frame's closure, the globals, and
+// every open upvalue.
+void markVMRoots() {
+  for (Value* slot = vm.stack_; slot < vm.stackTop_; slot++) {
+    markValue(*slot);
+  }
+  for (int i = 0; i < vm.frameCount_; i++) {
+    markObject(reinterpret_cast<Obj*>(vm.frames_[i].closure));
+  }
+  for (ObjUpvalue* uv = vm.openUpvalues_; uv != nullptr; uv = uv->next) {
+    markObject(reinterpret_cast<Obj*>(uv));
+  }
+  for (int i = 0; i < vm.globals_.capacity; i++) {
+    Entry* entry = &vm.globals_.entries[i];
+    if (entry->key != nullptr) markObject(reinterpret_cast<Obj*>(entry->key));
+    markValue(entry->value);
+  }
 }
 
 namespace {
@@ -423,7 +449,11 @@ InterpretResult VM::interpret(const char* source) {
   ObjFunction* function = compile(source);
   if (function == nullptr) return InterpretResult::CompileError;
 
+  // `function` is reachable only from this local while newClosure allocates.
+  pushTempRoot(objValue(function));
   ObjClosure* closure = newClosure(function);
+  popTempRoot();
+
   push(objValue(closure));
   call(closure, 0);
   return run();

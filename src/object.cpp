@@ -5,24 +5,28 @@
 #include <cstring>
 #include <new>
 
+#include "gc.hpp"
 #include "table.hpp"
 
 namespace rill {
 
-namespace {
-
-// The allocation list and the intern table. Phase 2 moves both onto the VM so
-// the collector can reach them; keeping them file-scoped here means Phase 1
-// needs no VM instance to allocate a string.
 Obj* g_objects = nullptr;
 Table g_strings;
 
+namespace {
+
+// The single allocation choke point. Every heap object passes through here,
+// which is what lets the collector sweep a complete list.
 Obj* allocateObject(size_t size, ObjType type) {
+  maybeCollect(size);
+
   auto* object = static_cast<Obj*>(std::malloc(size));
   object->type = type;
   object->isMarked = false;
   object->next = g_objects;
   g_objects = object;
+
+  recordAllocation(size);
   return object;
 }
 
@@ -32,11 +36,30 @@ ObjString* allocateString(char* chars, int length, uint32_t hash) {
   string->length = length;
   string->chars = chars;
   string->hash = hash;
+
+  // The intern table is weak, so this does not keep the string alive. set()
+  // allocates only raw memory, never objects, so it cannot collect here.
   g_strings.set(string, nilValue());
   return string;
 }
 
+size_t objectSize(Obj* object) {
+  switch (object->type) {
+    case ObjType::String:   return sizeof(ObjString);
+    case ObjType::Function: return sizeof(ObjFunction);
+    case ObjType::Closure:  return sizeof(ObjClosure);
+    case ObjType::Upvalue:  return sizeof(ObjUpvalue);
+    case ObjType::Native:   return sizeof(ObjNative);
+    case ObjType::Map:      return sizeof(ObjMap);
+  }
+  return 0;
+}
+
+}  // namespace
+
 void freeObject(Obj* object) {
+  recordFree(objectSize(object));
+
   switch (object->type) {
     case ObjType::String: {
       auto* string = reinterpret_cast<ObjString*>(object);
@@ -45,7 +68,7 @@ void freeObject(Obj* object) {
       break;
     }
     case ObjType::Function: {
-      // The Chunk holds std::vectors, so it needs its destructor run rather
+      // The Chunk owns std::vectors, so it needs its destructor run rather
       // than a bare free().
       auto* function = reinterpret_cast<ObjFunction*>(object);
       function->~ObjFunction();
@@ -60,15 +83,18 @@ void freeObject(Obj* object) {
       std::free(object);
       break;
     }
+    case ObjType::Map: {
+      auto* map = reinterpret_cast<ObjMap*>(object);
+      map->~ObjMap();
+      std::free(object);
+      break;
+    }
     case ObjType::Upvalue:
     case ObjType::Native:
-    case ObjType::Map:
       std::free(object);
       break;
   }
 }
-
-}  // namespace
 
 uint32_t hashString(const char* key, int length) {
   // FNV-1a, 32-bit.
@@ -102,6 +128,78 @@ ObjString* takeString(char* chars, int length) {
   return allocateString(chars, length, hash);
 }
 
+ObjFunction* newFunction() {
+  auto* function = reinterpret_cast<ObjFunction*>(
+      allocateObject(sizeof(ObjFunction), ObjType::Function));
+  // allocateObject hands back raw memory, so the Chunk's vectors must be
+  // constructed in place before anything touches them.
+  new (&function->chunk) Chunk();
+  function->arity = 0;
+  function->upvalueCount = 0;
+  function->name = nullptr;
+  return function;
+}
+
+ObjNative* newNative(NativeFn fn, const char* name, int arity) {
+  ObjString* nameStr = copyString(name, static_cast<int>(std::strlen(name)));
+  // nameStr is not reachable from anything yet and allocateObject below can
+  // collect, so it has to be rooted across that allocation.
+  pushTempRoot(objValue(nameStr));
+  auto* native = reinterpret_cast<ObjNative*>(
+      allocateObject(sizeof(ObjNative), ObjType::Native));
+  popTempRoot();
+
+  native->function = fn;
+  native->arity = arity;
+  native->name = nameStr;
+  return native;
+}
+
+ObjClosure* newClosure(ObjFunction* function) {
+  // +1 so a zero-upvalue closure still gets a non-null pointer to free.
+  auto** upvalues = static_cast<ObjUpvalue**>(std::malloc(
+      sizeof(ObjUpvalue*) * (static_cast<size_t>(function->upvalueCount) + 1)));
+  for (int i = 0; i < function->upvalueCount; i++) upvalues[i] = nullptr;
+
+  // The function may be reachable only through the caller's local variable.
+  pushTempRoot(objValue(function));
+  auto* closure = reinterpret_cast<ObjClosure*>(
+      allocateObject(sizeof(ObjClosure), ObjType::Closure));
+  popTempRoot();
+
+  closure->function = function;
+  closure->upvalues = upvalues;
+  closure->upvalueCount = function->upvalueCount;
+  return closure;
+}
+
+ObjUpvalue* newUpvalue(Value* slot) {
+  auto* upvalue = reinterpret_cast<ObjUpvalue*>(
+      allocateObject(sizeof(ObjUpvalue), ObjType::Upvalue));
+  upvalue->location = slot;
+  upvalue->closed = nilValue();
+  upvalue->next = nullptr;
+  return upvalue;
+}
+
+ObjMap* newMap(ObjMap* prototype) {
+  if (prototype != nullptr) pushTempRoot(objValue(prototype));
+  auto* map =
+      reinterpret_cast<ObjMap*>(allocateObject(sizeof(ObjMap), ObjType::Map));
+  if (prototype != nullptr) popTempRoot();
+
+  new (&map->fields) Table();
+  map->prototype = prototype;
+  return map;
+}
+
+bool mapGet(ObjMap* map, ObjString* name, Value* out) {
+  for (ObjMap* m = map; m != nullptr; m = m->prototype) {
+    if (m->fields.get(name, out)) return true;
+  }
+  return false;
+}
+
 void printObject(Value v) {
   switch (asObj(v)->type) {
     case ObjType::String:
@@ -122,54 +220,13 @@ void printObject(Value v) {
     case ObjType::Closure:
       printObject(objValue(asClosure(v)->function));
       break;
-    case ObjType::Upvalue:
     case ObjType::Map:
-      std::printf("<object>");
+      std::printf("<map>");
+      break;
+    case ObjType::Upvalue:
+      std::printf("<upvalue>");
       break;
   }
-}
-
-ObjFunction* newFunction() {
-  auto* function = reinterpret_cast<ObjFunction*>(
-      allocateObject(sizeof(ObjFunction), ObjType::Function));
-  // allocateObject hands back raw memory, so the Chunk's vectors must be
-  // constructed in place before anything touches them.
-  new (&function->chunk) Chunk();
-  function->arity = 0;
-  function->upvalueCount = 0;
-  function->name = nullptr;
-  return function;
-}
-
-ObjClosure* newClosure(ObjFunction* function) {
-  auto** upvalues = static_cast<ObjUpvalue**>(std::malloc(
-      sizeof(ObjUpvalue*) * static_cast<size_t>(function->upvalueCount)));
-  for (int i = 0; i < function->upvalueCount; i++) upvalues[i] = nullptr;
-
-  auto* closure = reinterpret_cast<ObjClosure*>(
-      allocateObject(sizeof(ObjClosure), ObjType::Closure));
-  closure->function = function;
-  closure->upvalues = upvalues;
-  closure->upvalueCount = function->upvalueCount;
-  return closure;
-}
-
-ObjUpvalue* newUpvalue(Value* slot) {
-  auto* upvalue = reinterpret_cast<ObjUpvalue*>(
-      allocateObject(sizeof(ObjUpvalue), ObjType::Upvalue));
-  upvalue->location = slot;
-  upvalue->closed = nilValue();
-  upvalue->next = nullptr;
-  return upvalue;
-}
-
-ObjNative* newNative(NativeFn fn, const char* name, int arity) {
-  auto* native = reinterpret_cast<ObjNative*>(
-      allocateObject(sizeof(ObjNative), ObjType::Native));
-  native->function = fn;
-  native->arity = arity;
-  native->name = copyString(name, static_cast<int>(std::strlen(name)));
-  return native;
 }
 
 void freeObjects() {
