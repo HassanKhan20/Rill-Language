@@ -35,6 +35,12 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
   switch (op) {
     case OpCode::Constant:
       return constantInstruction("Constant", chunk, offset);
+    case OpCode::DefineGlobal:
+      return constantInstruction("DefineGlobal", chunk, offset);
+    case OpCode::GetGlobal:
+      return constantInstruction("GetGlobal", chunk, offset);
+    case OpCode::SetGlobal:
+      return constantInstruction("SetGlobal", chunk, offset);
     case OpCode::Nil:
     case OpCode::True:
     case OpCode::False:

@@ -2,6 +2,7 @@
 
 #include "chunk.hpp"
 #include "common.hpp"
+#include "table.hpp"
 #include "value.hpp"
 
 namespace rill {
@@ -26,6 +27,7 @@ class VM {
 
   Chunk* chunk_ = nullptr;
   uint8_t* ip_ = nullptr;
+  Table globals_;
 
   // A fixed array, not a vector: open upvalues will hold raw pointers into
   // this storage and must not be invalidated by reallocation.

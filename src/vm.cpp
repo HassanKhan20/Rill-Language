@@ -82,6 +82,36 @@ InterpretResult VM::run() {
       case OpCode::False:    push(boolValue(false)); break;
       case OpCode::Pop:      pop(); break;
 
+      case OpCode::DefineGlobal: {
+        ObjString* name = asString(READ_CONSTANT());
+        globals_.set(name, peek(0));
+        pop();
+        break;
+      }
+
+      case OpCode::GetGlobal: {
+        ObjString* name = asString(READ_CONSTANT());
+        Value value;
+        if (!globals_.get(name, &value)) {
+          runtimeError("undefined variable '%s'", name->chars);
+          return InterpretResult::RuntimeError;
+        }
+        push(value);
+        break;
+      }
+
+      case OpCode::SetGlobal: {
+        ObjString* name = asString(READ_CONSTANT());
+        // Assignment never creates a binding, so a miss is an error and the
+        // table entry it just created must be undone.
+        if (globals_.set(name, peek(0))) {
+          globals_.remove(name);
+          runtimeError("undefined variable '%s'", name->chars);
+          return InterpretResult::RuntimeError;
+        }
+        break;
+      }
+
       case OpCode::Not: push(boolValue(isFalsey(pop()))); break;
 
       case OpCode::Negate:

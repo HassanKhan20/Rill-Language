@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <set>
+#include <string>
 
 #include "compiler.hpp"
 #include "object.hpp"
@@ -80,9 +82,40 @@ void binary(bool) {
   }
 }
 
+// The set of names bound with `let`. Immutability is enforced here, at
+// compile time, rather than by a runtime flag on the value.
+std::set<std::string> g_immutableGlobals;
+
+std::string lexemeOf(const Token& t) {
+  return std::string(t.start, static_cast<size_t>(t.length));
+}
+
+uint8_t identifierConstant(Token name) {
+  return makeConstant(objValue(copyString(name.start, name.length)));
+}
+
+// `name` is deliberately by value: it usually aliases parser.previous, and
+// match() below advances the token stream, which would overwrite a reference.
+void namedVariable(Token name, bool canAssign) {
+  uint8_t arg = identifierConstant(name);
+
+  if (canAssign && match(TokenType::Equal)) {
+    if (g_immutableGlobals.count(lexemeOf(name)) != 0) {
+      std::string msg =
+          "cannot assign to immutable binding '" + lexemeOf(name) + "'";
+      error(msg.c_str());
+      return;
+    }
+    expression();
+    emitBytes(static_cast<uint8_t>(OpCode::SetGlobal), arg);
+  } else {
+    emitBytes(static_cast<uint8_t>(OpCode::GetGlobal), arg);
+  }
+}
+
 // Temporary: `print` is recognised syntactically until native functions land,
 // at which point this becomes an ordinary call and OpCode::Print disappears.
-void identifier(bool) {
+void identifier(bool canAssign) {
   if (parser.previous.length == 5 &&
       std::memcmp(parser.previous.start, "print", 5) == 0) {
     consume(TokenType::LeftParen, "expected '(' after 'print'");
@@ -91,7 +124,30 @@ void identifier(bool) {
     emitOp(OpCode::Print);
     return;
   }
-  error("undefined variable");
+  namedVariable(parser.previous, canAssign);
+}
+
+// `let` and `var` are prefix expressions, not statements: a declaration is an
+// expression that yields nil.
+void declaration(bool) {
+  bool isMutable = parser.previous.type == TokenType::Var;
+
+  consume(TokenType::Identifier, "expected a name after 'let' or 'var'");
+  Token name = parser.previous;
+  uint8_t global = identifierConstant(name);
+
+  consume(TokenType::Equal, "expected '=' in binding");
+  expression();
+
+  if (isMutable) {
+    g_immutableGlobals.erase(lexemeOf(name));
+  } else {
+    g_immutableGlobals.insert(lexemeOf(name));
+  }
+
+  emitBytes(static_cast<uint8_t>(OpCode::DefineGlobal), global);
+  // The declaration's own value.
+  emitOp(OpCode::Nil);
 }
 
 // clang-format off
@@ -123,8 +179,8 @@ const ParseRule kRules[] = {
     /* String       */ {string,   nullptr, Prec::None},
     /* Number       */ {number,   nullptr, Prec::None},
     /* Underscore   */ {nullptr,  nullptr, Prec::None},
-    /* Let          */ {nullptr,  nullptr, Prec::None},
-    /* Var          */ {nullptr,  nullptr, Prec::None},
+    /* Let          */ {declaration, nullptr, Prec::None},
+    /* Var          */ {declaration, nullptr, Prec::None},
     /* Fn           */ {nullptr,  nullptr, Prec::None},
     /* If           */ {nullptr,  nullptr, Prec::None},
     /* Else         */ {nullptr,  nullptr, Prec::None},
