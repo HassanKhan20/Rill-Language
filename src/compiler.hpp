@@ -34,6 +34,14 @@ struct LoopContext {
   int breakCount = 0;
 };
 
+// A compile-time upvalue: where the enclosing function keeps the captured
+// variable. `isLocal` distinguishes a local of the immediately enclosing
+// function from an upvalue it in turn captured.
+struct Upvalue {
+  uint8_t index;
+  bool isLocal;
+};
+
 struct Local {
   Token name;
   int depth;       // Scope depth, or -1 while the initializer is compiling.
@@ -54,6 +62,7 @@ struct Compiler {
   FunctionType type = FunctionType::Script;
   Local locals[kUint8Count];
   int localCount = 0;
+  Upvalue upvalues[kUint8Count];
   int scopeDepth = 0;
   int stackDepth = 0;
   LoopContext* loop = nullptr;
@@ -145,5 +154,10 @@ void declareLocal(Token name, bool isMutable);
 // Returns the slot of a local with this name, or -1. Reports an error if the
 // name is found but is still being initialized.
 int resolveLocal(Compiler* compiler, Token name, bool* isMutableOut);
+
+// Resolves a name to an upvalue index, adding upvalue entries to every
+// compiler between here and the one that owns the local. Returns -1 if the
+// name is not found in any enclosing function.
+int resolveUpvalue(Compiler* compiler, Token name, bool* isMutableOut);
 
 }  // namespace rill

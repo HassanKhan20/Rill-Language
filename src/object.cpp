@@ -52,7 +52,14 @@ void freeObject(Obj* object) {
       std::free(object);
       break;
     }
-    case ObjType::Closure:
+    case ObjType::Closure: {
+      // The closure owns its upvalue array but not the upvalues themselves,
+      // which may still be shared with other closures.
+      auto* closure = reinterpret_cast<ObjClosure*>(object);
+      std::free(closure->upvalues);
+      std::free(object);
+      break;
+    }
     case ObjType::Upvalue:
     case ObjType::Native:
     case ObjType::Map:
@@ -113,6 +120,8 @@ void printObject(Value v) {
       std::printf("<native %s>", asNative(v)->name->chars);
       break;
     case ObjType::Closure:
+      printObject(objValue(asClosure(v)->function));
+      break;
     case ObjType::Upvalue:
     case ObjType::Map:
       std::printf("<object>");
@@ -130,6 +139,28 @@ ObjFunction* newFunction() {
   function->upvalueCount = 0;
   function->name = nullptr;
   return function;
+}
+
+ObjClosure* newClosure(ObjFunction* function) {
+  auto** upvalues = static_cast<ObjUpvalue**>(std::malloc(
+      sizeof(ObjUpvalue*) * static_cast<size_t>(function->upvalueCount)));
+  for (int i = 0; i < function->upvalueCount; i++) upvalues[i] = nullptr;
+
+  auto* closure = reinterpret_cast<ObjClosure*>(
+      allocateObject(sizeof(ObjClosure), ObjType::Closure));
+  closure->function = function;
+  closure->upvalues = upvalues;
+  closure->upvalueCount = function->upvalueCount;
+  return closure;
+}
+
+ObjUpvalue* newUpvalue(Value* slot) {
+  auto* upvalue = reinterpret_cast<ObjUpvalue*>(
+      allocateObject(sizeof(ObjUpvalue), ObjType::Upvalue));
+  upvalue->location = slot;
+  upvalue->closed = nilValue();
+  upvalue->next = nullptr;
+  return upvalue;
 }
 
 ObjNative* newNative(NativeFn fn, const char* name, int arity) {

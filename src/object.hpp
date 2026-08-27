@@ -41,6 +41,22 @@ struct ObjNative : Obj {
   int arity;  // -1 accepts any number of arguments.
 };
 
+// An upvalue points at a variable that outlives the stack slot holding it.
+// While the slot is live, `location` points into the value stack ("open");
+// once the slot dies the value is copied into `closed` and `location` is
+// repointed there.
+struct ObjUpvalue : Obj {
+  Value* location;
+  Value closed;
+  ObjUpvalue* next;  // Open upvalues, sorted by slot, highest first.
+};
+
+struct ObjClosure : Obj {
+  ObjFunction* function;
+  ObjUpvalue** upvalues;
+  int upvalueCount;
+};
+
 inline bool isObjType(Value v, ObjType t) {
   return isObj(v) && asObj(v)->type == t;
 }
@@ -61,8 +77,15 @@ inline ObjNative* asNative(Value v) {
   return reinterpret_cast<ObjNative*>(asObj(v));
 }
 
+inline bool isClosure(Value v) { return isObjType(v, ObjType::Closure); }
+inline ObjClosure* asClosure(Value v) {
+  return reinterpret_cast<ObjClosure*>(asObj(v));
+}
+
 ObjFunction* newFunction();
 ObjNative* newNative(NativeFn function, const char* name, int arity);
+ObjClosure* newClosure(ObjFunction* function);
+ObjUpvalue* newUpvalue(Value* slot);
 
 uint32_t hashString(const char* key, int length);
 

@@ -11,7 +11,7 @@ namespace rill {
 enum class InterpretResult { Ok, CompileError, RuntimeError };
 
 struct CallFrame {
-  ObjFunction* function;
+  ObjClosure* closure;
   uint8_t* ip;
   Value* slots;  // Points at the callee's slot 0 within the value stack.
 };
@@ -35,11 +35,19 @@ class VM {
   void resetStack();
   void runtimeError(const char* format, ...);
   bool callValue(Value callee, int argCount);
-  bool call(ObjFunction* function, int argCount);
+  bool call(ObjClosure* closure, int argCount);
+
+  // Returns the upvalue for `local`, reusing an already-open one for that
+  // slot so that closures over the same variable share it.
+  ObjUpvalue* captureUpvalue(Value* local);
+
+  // Closes every open upvalue at or above `last`.
+  void closeUpvalues(Value* last);
 
   Table globals_;
   CallFrame frames_[kFramesMax];
   int frameCount_ = 0;
+  ObjUpvalue* openUpvalues_ = nullptr;
 
   // A fixed array, not a vector: open upvalues will hold raw pointers into
   // this storage and must not be invalidated by reallocation.

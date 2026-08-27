@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "object.hpp"
+
 namespace rill {
 
 namespace {
@@ -72,6 +74,30 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return jumpInstruction("Loop", -1, chunk, offset);
     case OpCode::Call:
       return byteInstruction("Call", chunk, offset);
+    case OpCode::GetUpvalue:
+      return byteInstruction("GetUpvalue", chunk, offset);
+    case OpCode::SetUpvalue:
+      return byteInstruction("SetUpvalue", chunk, offset);
+    case OpCode::CloseUpvalue:
+      return byteInstruction("CloseUpvalue", chunk, offset);
+    case OpCode::Closure: {
+      // A Closure carries two extra bytes per upvalue; skipping them is what
+      // keeps the disassembler in sync with the instruction stream.
+      offset++;
+      uint8_t constant = chunk.code[static_cast<size_t>(offset++)];
+      std::printf("%-16s %4d '", "Closure", constant);
+      printValue(chunk.constants[constant]);
+      std::printf("'\n");
+
+      ObjFunction* function = asFunction(chunk.constants[constant]);
+      for (int j = 0; j < function->upvalueCount; j++) {
+        int isLocal = chunk.code[static_cast<size_t>(offset++)];
+        int index = chunk.code[static_cast<size_t>(offset++)];
+        std::printf("%04d      |                     %s %d\n", offset - 2,
+                    isLocal ? "local" : "upvalue", index);
+      }
+      return offset;
+    }
     case OpCode::Nil:
     case OpCode::True:
     case OpCode::False:

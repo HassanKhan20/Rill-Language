@@ -39,6 +39,10 @@ const char* opCodeName(OpCode op) {
     case OpCode::SetGlobal:    return "SetGlobal";
     case OpCode::GetLocal:     return "GetLocal";
     case OpCode::SetLocal:     return "SetLocal";
+    case OpCode::GetUpvalue:   return "GetUpvalue";
+    case OpCode::SetUpvalue:   return "SetUpvalue";
+    case OpCode::CloseUpvalue: return "CloseUpvalue";
+    case OpCode::Closure:      return "Closure";
     case OpCode::Negate:   return "Negate";
     case OpCode::Not:      return "Not";
     case OpCode::Add:      return "Add";

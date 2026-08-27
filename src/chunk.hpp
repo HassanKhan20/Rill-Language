@@ -22,6 +22,10 @@ enum class OpCode : uint8_t {
   SetGlobal,
   GetLocal,
   SetLocal,
+  GetUpvalue,
+  SetUpvalue,
+  CloseUpvalue,  // Operand: close every open upvalue at or above this slot.
+  Closure,       // Operand: constant index, then 2 bytes per upvalue.
   Negate,
   Not,
   Add,

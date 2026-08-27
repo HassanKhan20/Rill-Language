@@ -22,6 +22,8 @@ int stackEffect(OpCode op) {
     case OpCode::False:
     case OpCode::GetGlobal:
     case OpCode::GetLocal:
+    case OpCode::GetUpvalue:
+    case OpCode::Closure:
       return +1;
 
     case OpCode::Pop:
@@ -40,12 +42,14 @@ int stackEffect(OpCode op) {
     // replaced rather than removed. Print likewise yields nil.
     case OpCode::SetGlobal:
     case OpCode::SetLocal:
+    case OpCode::SetUpvalue:
     case OpCode::Negate:
     case OpCode::Not:
       return 0;
 
     // Variable or externally-managed effects: handled at the emission site.
     case OpCode::PopN:
+    case OpCode::CloseUpvalue:
     case OpCode::CloseScope:
     case OpCode::Jump:
     case OpCode::JumpIfFalse:
@@ -210,10 +214,20 @@ void endScope() {
   current->scopeDepth--;
 
   int popped = 0;
+  int lowestCapturedSlot = -1;
   while (current->localCount > 0 &&
          current->locals[current->localCount - 1].depth > current->scopeDepth) {
+    const Local& local = current->locals[current->localCount - 1];
+    if (local.isCaptured) lowestCapturedSlot = local.slot;
     popped++;
     current->localCount--;
+  }
+
+  // Any local a closure captured must be lifted off the stack before its slot
+  // is reused, or the closure would read a stale or unrelated value.
+  if (lowestCapturedSlot != -1) {
+    emitOpArg(OpCode::CloseUpvalue,
+              static_cast<uint8_t>(lowestCapturedSlot));
   }
 
   if (popped > 0) {
@@ -247,6 +261,53 @@ void declareLocal(Token name, bool isMutable) {
   local->slot = current->stackDepth - 1;
   local->isCaptured = false;
   local->isMutable = isMutable;
+}
+
+namespace {
+
+// Adds an upvalue to `compiler`, reusing an existing entry for the same
+// source. The reuse matters: two references to the same variable must share
+// one upvalue, or assignments through one would be invisible to the other.
+int addUpvalue(Compiler* compiler, uint8_t index, bool isLocal) {
+  int count = compiler->function->upvalueCount;
+  for (int i = 0; i < count; i++) {
+    Upvalue* existing = &compiler->upvalues[i];
+    if (existing->index == index && existing->isLocal == isLocal) return i;
+  }
+  if (count == kUint8Count) {
+    error("too many captured variables in one function");
+    return 0;
+  }
+  compiler->upvalues[count].isLocal = isLocal;
+  compiler->upvalues[count].index = index;
+  return compiler->function->upvalueCount++;
+}
+
+}  // namespace
+
+int resolveUpvalue(Compiler* compiler, Token name, bool* isMutableOut) {
+  if (compiler->enclosing == nullptr) return -1;
+
+  int local = resolveLocal(compiler->enclosing, name, isMutableOut);
+  if (local != -1) {
+    // Mark the local so the enclosing scope closes it rather than discarding
+    // it when the scope ends.
+    for (int i = compiler->enclosing->localCount - 1; i >= 0; i--) {
+      if (compiler->enclosing->locals[i].slot == local) {
+        compiler->enclosing->locals[i].isCaptured = true;
+        break;
+      }
+    }
+    return addUpvalue(compiler, static_cast<uint8_t>(local), true);
+  }
+
+  // Not a local of the immediate parent: recurse, and thread the capture back
+  // down through every intervening function as the recursion unwinds.
+  int upvalue = resolveUpvalue(compiler->enclosing, name, isMutableOut);
+  if (upvalue != -1) {
+    return addUpvalue(compiler, static_cast<uint8_t>(upvalue), false);
+  }
+  return -1;
 }
 
 int resolveLocal(Compiler* compiler, Token name, bool* isMutableOut) {

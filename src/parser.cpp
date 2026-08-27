@@ -99,6 +99,7 @@ uint8_t identifierConstant(Token name) {
 void namedVariable(Token name, bool canAssign) {
   bool localIsMutable = false;
   int slot = resolveLocal(current, name, &localIsMutable);
+  int upvalue = slot == -1 ? resolveUpvalue(current, name, &localIsMutable) : -1;
 
   OpCode getOp, setOp;
   uint8_t arg;
@@ -107,6 +108,11 @@ void namedVariable(Token name, bool canAssign) {
     getOp = OpCode::GetLocal;
     setOp = OpCode::SetLocal;
     arg = static_cast<uint8_t>(slot);
+    isMutable = localIsMutable;
+  } else if (upvalue != -1) {
+    getOp = OpCode::GetUpvalue;
+    setOp = OpCode::SetUpvalue;
+    arg = static_cast<uint8_t>(upvalue);
     isMutable = localIsMutable;
   } else {
     getOp = OpCode::GetGlobal;
@@ -172,7 +178,14 @@ void fnExpr(bool) {
   consume(TokenType::RightBrace, "expected '}' after function body");
 
   ObjFunction* function = endCompiler();
-  emitConstant(objValue(function));
+
+  // A Closure instruction carries the function constant followed by two bytes
+  // per upvalue describing where to capture each one from.
+  emitOpArg(OpCode::Closure, makeConstant(objValue(function)));
+  for (int i = 0; i < function->upvalueCount; i++) {
+    emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
+    emitByte(compiler.upvalues[i].index);
+  }
 }
 
 // `return <expr>` or a bare `return` yielding nil.
