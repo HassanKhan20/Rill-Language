@@ -22,6 +22,8 @@ add_library(rill_core
   src/value.cpp
   src/chunk.cpp
   src/debug.cpp
+  src/table.cpp
+  src/object.cpp
 )
 target_include_directories(rill_core PUBLIC src)
 target_compile_options(rill_core PUBLIC -Wall -Wextra -Werror)
@@ -41,6 +43,8 @@ add_executable(rill_tests
   tests/unit/main.cpp
   tests/unit/test_lexer.cpp
   tests/unit/test_chunk.cpp
+  tests/unit/test_table.cpp
+  tests/unit/test_object.cpp
 )
 target_link_libraries(rill_tests PRIVATE rill_core)
 target_include_directories(rill_tests PRIVATE tests/unit)

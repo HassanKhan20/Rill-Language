@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "object.hpp"
+
 namespace rill {
 
 bool valuesEqual(Value a, Value b) {
@@ -30,9 +32,7 @@ void printValue(Value v) {
       std::printf("%g", asNumber(v));
       break;
     case ValueType::Obj:
-      // Objects gain their own printing when the object model lands; nothing
-      // can construct one yet.
-      std::printf("<object>");
+      printObject(v);
       break;
   }
 }
