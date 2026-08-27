@@ -112,6 +112,28 @@ InterpretResult VM::run() {
         break;
       }
 
+      case OpCode::GetLocal: {
+        uint8_t slot = READ_BYTE();
+        push(stack_[slot]);
+        break;
+      }
+
+      case OpCode::SetLocal: {
+        uint8_t slot = READ_BYTE();
+        // Assignment is an expression, so the value stays on the stack.
+        stack_[slot] = peek(0);
+        break;
+      }
+
+      case OpCode::CloseScope: {
+        uint8_t count = READ_BYTE();
+        // Remove the scope's locals from under the block's result value.
+        Value result = pop();
+        stackTop_ -= count;
+        push(result);
+        break;
+      }
+
       case OpCode::Not: push(boolValue(isFalsey(pop()))); break;
 
       case OpCode::Negate:

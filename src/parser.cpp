@@ -97,19 +97,35 @@ uint8_t identifierConstant(Token name) {
 // `name` is deliberately by value: it usually aliases parser.previous, and
 // match() below advances the token stream, which would overwrite a reference.
 void namedVariable(Token name, bool canAssign) {
-  uint8_t arg = identifierConstant(name);
+  bool localIsMutable = false;
+  int slot = resolveLocal(current, name, &localIsMutable);
+
+  OpCode getOp, setOp;
+  uint8_t arg;
+  bool isMutable;
+  if (slot != -1) {
+    getOp = OpCode::GetLocal;
+    setOp = OpCode::SetLocal;
+    arg = static_cast<uint8_t>(slot);
+    isMutable = localIsMutable;
+  } else {
+    getOp = OpCode::GetGlobal;
+    setOp = OpCode::SetGlobal;
+    arg = identifierConstant(name);
+    isMutable = g_immutableGlobals.count(lexemeOf(name)) == 0;
+  }
 
   if (canAssign && match(TokenType::Equal)) {
-    if (g_immutableGlobals.count(lexemeOf(name)) != 0) {
+    if (!isMutable) {
       std::string msg =
           "cannot assign to immutable binding '" + lexemeOf(name) + "'";
       error(msg.c_str());
       return;
     }
     expression();
-    emitBytes(static_cast<uint8_t>(OpCode::SetGlobal), arg);
+    emitOpArg(setOp, arg);
   } else {
-    emitBytes(static_cast<uint8_t>(OpCode::GetGlobal), arg);
+    emitOpArg(getOp, arg);
   }
 }
 
@@ -134,27 +150,40 @@ void declaration(bool) {
 
   consume(TokenType::Identifier, "expected a name after 'let' or 'var'");
   Token name = parser.previous;
-  uint8_t global = identifierConstant(name);
 
   consume(TokenType::Equal, "expected '=' in binding");
   expression();
 
-  if (isMutable) {
-    g_immutableGlobals.erase(lexemeOf(name));
+  if (current->scopeDepth > 0) {
+    // A local keeps the slot its initializer just landed on.
+    declareLocal(name, isMutable);
   } else {
-    g_immutableGlobals.insert(lexemeOf(name));
+    if (isMutable) {
+      g_immutableGlobals.erase(lexemeOf(name));
+    } else {
+      g_immutableGlobals.insert(lexemeOf(name));
+    }
+    emitOpArg(OpCode::DefineGlobal, identifierConstant(name));
   }
 
-  emitBytes(static_cast<uint8_t>(OpCode::DefineGlobal), global);
   // The declaration's own value.
   emitOp(OpCode::Nil);
+}
+
+// A brace-delimited block is an expression whose value is its final
+// expression.
+void block(bool) {
+  beginScope();
+  exprList(TokenType::RightBrace);
+  consume(TokenType::RightBrace, "expected '}' after block");
+  endScope();
 }
 
 // clang-format off
 const ParseRule kRules[] = {
     /* LeftParen    */ {grouping, nullptr, Prec::None},
     /* RightParen   */ {nullptr,  nullptr, Prec::None},
-    /* LeftBrace    */ {nullptr,  nullptr, Prec::None},
+    /* LeftBrace    */ {block,    nullptr, Prec::None},
     /* RightBrace   */ {nullptr,  nullptr, Prec::None},
     /* Comma        */ {nullptr,  nullptr, Prec::None},
     /* Dot          */ {nullptr,  nullptr, Prec::None},

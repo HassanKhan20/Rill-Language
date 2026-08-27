@@ -15,9 +15,12 @@ enum class OpCode : uint8_t {
   True,
   False,
   Pop,
+  CloseScope,  // Operand: how many slots to discard from under the top value.
   DefineGlobal,
   GetGlobal,
   SetGlobal,
+  GetLocal,
+  SetLocal,
   Negate,
   Not,
   Add,

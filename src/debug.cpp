@@ -6,6 +6,12 @@ namespace rill {
 
 namespace {
 
+int byteInstruction(const char* name, const Chunk& chunk, int offset) {
+  uint8_t slot = chunk.code[static_cast<size_t>(offset) + 1];
+  std::printf("%-16s %4d\n", name, slot);
+  return offset + 2;
+}
+
 int simpleInstruction(const char* name, int offset) {
   std::printf("%s\n", name);
   return offset + 1;
@@ -41,6 +47,12 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return constantInstruction("GetGlobal", chunk, offset);
     case OpCode::SetGlobal:
       return constantInstruction("SetGlobal", chunk, offset);
+    case OpCode::GetLocal:
+      return byteInstruction("GetLocal", chunk, offset);
+    case OpCode::SetLocal:
+      return byteInstruction("SetLocal", chunk, offset);
+    case OpCode::CloseScope:
+      return byteInstruction("CloseScope", chunk, offset);
     case OpCode::Nil:
     case OpCode::True:
     case OpCode::False:

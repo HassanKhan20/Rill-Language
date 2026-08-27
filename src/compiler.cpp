@@ -1,26 +1,74 @@
 #include "compiler.hpp"
 
 #include <cstdio>
+#include <cstring>
 
 #include "parser.hpp"
 
 namespace rill {
 
 Parser parser;
+Compiler* current = nullptr;
 
 namespace {
 
 Chunk* g_compilingChunk = nullptr;
 
+// How each opcode changes the stack depth. Opcodes carrying a variable effect
+// (CloseScope, Call) are handled at their emission site instead.
+int stackEffect(OpCode op) {
+  switch (op) {
+    case OpCode::Constant:
+    case OpCode::Nil:
+    case OpCode::True:
+    case OpCode::False:
+    case OpCode::GetGlobal:
+    case OpCode::GetLocal:
+      return +1;
+
+    case OpCode::Pop:
+    case OpCode::DefineGlobal:
+    case OpCode::Add:
+    case OpCode::Subtract:
+    case OpCode::Multiply:
+    case OpCode::Divide:
+    case OpCode::Modulo:
+    case OpCode::Equal:
+    case OpCode::Greater:
+    case OpCode::Less:
+      return -1;
+
+    // Assignment yields the assigned value, so the operand it consumed is
+    // replaced rather than removed. Print likewise yields nil.
+    case OpCode::SetGlobal:
+    case OpCode::SetLocal:
+    case OpCode::Negate:
+    case OpCode::Not:
+    case OpCode::Print:
+      return 0;
+
+    case OpCode::CloseScope:
+    case OpCode::Return:
+      return 0;
+  }
+  return 0;
+}
+
+bool identifiersEqual(const Token& a, const Token& b) {
+  if (a.length != b.length) return false;
+  return std::memcmp(a.start, b.start, static_cast<size_t>(a.length)) == 0;
+}
+
 }  // namespace
 
 Chunk* currentChunk() { return g_compilingChunk; }
 
+int stackDepth() { return current->stackDepth; }
+void setStackDepth(int depth) { current->stackDepth = depth; }
+
 // --- Error reporting ------------------------------------------------------
 
 void errorAt(const Token& token, const char* message) {
-  // Only the first error in a burst is useful; the rest are usually noise
-  // from a parser that has lost its place.
   if (parser.panicMode) return;
   parser.panicMode = true;
 
@@ -78,11 +126,20 @@ void emitBytes(uint8_t a, uint8_t b) {
   emitByte(b);
 }
 
-void emitOp(OpCode op) { emitByte(static_cast<uint8_t>(op)); }
+void emitOp(OpCode op) {
+  emitByte(static_cast<uint8_t>(op));
+  current->stackDepth += stackEffect(op);
+}
 
 void emitOps(OpCode a, OpCode b) {
   emitOp(a);
   emitOp(b);
+}
+
+void emitOpArg(OpCode op, uint8_t arg) {
+  emitByte(static_cast<uint8_t>(op));
+  emitByte(arg);
+  current->stackDepth += stackEffect(op);
 }
 
 uint8_t makeConstant(Value value) {
@@ -95,16 +152,80 @@ uint8_t makeConstant(Value value) {
 }
 
 void emitConstant(Value value) {
-  emitBytes(static_cast<uint8_t>(OpCode::Constant), makeConstant(value));
+  emitOpArg(OpCode::Constant, makeConstant(value));
+}
+
+// --- Scopes and locals ----------------------------------------------------
+
+void beginScope() { current->scopeDepth++; }
+
+void endScope() {
+  current->scopeDepth--;
+
+  int popped = 0;
+  while (current->localCount > 0 &&
+         current->locals[current->localCount - 1].depth > current->scopeDepth) {
+    popped++;
+    current->localCount--;
+  }
+
+  if (popped > 0) {
+    // The block's result is on top; CloseScope removes the locals from
+    // underneath it without disturbing it.
+    emitOpArg(OpCode::CloseScope, static_cast<uint8_t>(popped));
+    current->stackDepth -= popped;
+  }
+}
+
+void declareLocal(Token name, bool isMutable) {
+  if (current->localCount == kUint8Count) {
+    error("too many local bindings in one function");
+    return;
+  }
+
+  for (int i = current->localCount - 1; i >= 0; i--) {
+    Local* local = &current->locals[i];
+    if (local->depth != -1 && local->depth < current->scopeDepth) break;
+    if (identifiersEqual(name, local->name)) {
+      error("already a binding with this name in this scope");
+      return;
+    }
+  }
+
+  Local* local = &current->locals[current->localCount++];
+  local->name = name;
+  local->depth = current->scopeDepth;
+  // The initializer has already been emitted, so it occupies the slot just
+  // below the current depth.
+  local->slot = current->stackDepth - 1;
+  local->isCaptured = false;
+  local->isMutable = isMutable;
+}
+
+int resolveLocal(Compiler* compiler, Token name, bool* isMutableOut) {
+  for (int i = compiler->localCount - 1; i >= 0; i--) {
+    Local* local = &compiler->locals[i];
+    if (identifiersEqual(name, local->name)) {
+      if (local->depth == -1) {
+        error("cannot read a binding in its own initializer");
+      }
+      if (isMutableOut != nullptr) *isMutableOut = local->isMutable;
+      return local->slot;
+    }
+  }
+  return -1;
 }
 
 // --- Entry point ----------------------------------------------------------
 
 bool compile(const char* source, Chunk* chunk) {
   Lexer lexer(source);
+  Compiler compiler;
+
   parser.lexer = &lexer;
   parser.hadError = false;
   parser.panicMode = false;
+  current = &compiler;
   g_compilingChunk = chunk;
 
   advance();
@@ -115,6 +236,7 @@ bool compile(const char* source, Chunk* chunk) {
   emitOp(OpCode::Return);
 
   parser.lexer = nullptr;
+  current = nullptr;
   g_compilingChunk = nullptr;
   return !parser.hadError;
 }

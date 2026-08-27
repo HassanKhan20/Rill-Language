@@ -32,9 +32,12 @@ const char* opCodeName(OpCode op) {
     case OpCode::True:     return "True";
     case OpCode::False:    return "False";
     case OpCode::Pop:      return "Pop";
+    case OpCode::CloseScope:   return "CloseScope";
     case OpCode::DefineGlobal: return "DefineGlobal";
     case OpCode::GetGlobal:    return "GetGlobal";
     case OpCode::SetGlobal:    return "SetGlobal";
+    case OpCode::GetLocal:     return "GetLocal";
+    case OpCode::SetLocal:     return "SetLocal";
     case OpCode::Negate:   return "Negate";
     case OpCode::Not:      return "Not";
     case OpCode::Add:      return "Add";
