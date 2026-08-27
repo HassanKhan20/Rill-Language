@@ -190,9 +190,15 @@ convention `self`.
 
 ### 4.8 Builtins
 
-`print`, `clock`, `len`, `str`, `num`, `sqrt`, `floor`, `clone`, `keys`,
-`has`. Builtins are ordinary values bound in the global scope and can be
+`print`, `clock`, `len`, `str`, `num`, `sqrt`, `floor`, `clone`, `has`, `gc`,
+`gcCount`. Builtins are ordinary values bound in the global scope and can be
 shadowed.
+
+`keys` was dropped during implementation: Rill has no array type, so it has
+nothing meaningful to return. `has(map, name)` covers the actual need, which
+is asking whether a name resolves anywhere on a prototype chain. `gc` and
+`gcCount` were added so the collector's behaviour is observable from a test
+and measurable from a benchmark.
 
 ### 4.9 Grammar
 

@@ -38,6 +38,7 @@ int stackEffect(OpCode op) {
     case OpCode::Equal:
     case OpCode::Greater:
     case OpCode::Less:
+    case OpCode::SetProperty:
       return -1;
 
     // Assignment yields the assigned value, so the operand it consumed is
@@ -45,12 +46,15 @@ int stackEffect(OpCode op) {
     case OpCode::SetGlobal:
     case OpCode::SetLocal:
     case OpCode::SetUpvalue:
+    case OpCode::Swap:
+    case OpCode::GetProperty:
     case OpCode::Negate:
     case OpCode::Not:
       return 0;
 
     // Variable or externally-managed effects: handled at the emission site.
     case OpCode::PopN:
+    case OpCode::MakeMap:
     case OpCode::CloseUpvalue:
     case OpCode::CloseScope:
     case OpCode::Jump:
@@ -123,6 +127,15 @@ bool match(TokenType type) {
   if (!check(type)) return false;
   advance();
   return true;
+}
+
+Token peekAfterCurrent() {
+  // A Lexer is just two pointers and a line counter, so saving and restoring
+  // it is a cheap way to get a second token of lookahead without buffering.
+  Lexer saved = *parser.lexer;
+  Token next = parser.lexer->next();
+  *parser.lexer = saved;
+  return next;
 }
 
 // --- Emission -------------------------------------------------------------

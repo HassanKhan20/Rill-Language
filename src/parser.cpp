@@ -359,7 +359,66 @@ void blockBody() {
   endScope();
 }
 
-void block(bool) { blockBody(); }
+// A map literal: { name: expr, ... }. Fields are emitted as alternating name
+// constants and values, then collapsed by MakeMap.
+void mapLiteral() {
+  int base = stackDepth();
+  int fields = 0;
+
+  if (!check(TokenType::RightBrace)) {
+    do {
+      if (check(TokenType::RightBrace)) break;  // Trailing comma.
+      consume(TokenType::Identifier, "expected a field name");
+      emitConstant(objValue(
+          copyString(parser.previous.start, parser.previous.length)));
+      consume(TokenType::Colon, "expected ':' after field name");
+      expression();
+      fields++;
+      if (fields > 255) error("cannot have more than 255 fields in a literal");
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightBrace, "expected '}' after map literal");
+
+  emitOpArg(OpCode::MakeMap, static_cast<uint8_t>(fields));
+  setStackDepth(base + 1);
+}
+
+// `{` starts both a block and a map literal. An immediate `}` is the empty
+// map; an identifier followed by `:` is a field; anything else is a block.
+void block(bool) {
+  bool isMap = check(TokenType::RightBrace) ||
+               (check(TokenType::Identifier) &&
+                peekAfterCurrent().type == TokenType::Colon);
+  if (isMap) {
+    mapLiteral();
+  } else {
+    blockBody();
+  }
+}
+
+// Property access, assignment, and method calls. A method call passes the
+// receiver as the first argument, so there is no `this`: the receiver is an
+// ordinary named parameter, by convention `self`.
+void dot(bool canAssign) {
+  consume(TokenType::Identifier, "expected a property name after '.'");
+  uint8_t name = identifierConstant(parser.previous);
+
+  if (canAssign && match(TokenType::Equal)) {
+    expression();
+    emitOpArg(OpCode::SetProperty, name);
+  } else if (check(TokenType::LeftParen)) {
+    advance();
+    // [recv] -> Dup -> [recv, recv] -> GetProperty -> [recv, method]
+    //        -> Swap -> [method, recv], which is the calling convention.
+    emitOp(OpCode::Dup);
+    emitOpArg(OpCode::GetProperty, name);
+    emitOp(OpCode::Swap);
+    uint8_t argCount = argumentList();
+    emitCall(static_cast<uint8_t>(argCount + 1));
+  } else {
+    emitOpArg(OpCode::GetProperty, name);
+  }
+}
 
 // if/else is an expression. Both arms must leave exactly one value, and the
 // compiler must reset its depth tracking at the branch point because it emits
@@ -484,7 +543,7 @@ const ParseRule kRules[] = {
     /* LeftBrace    */ {block,    nullptr, Prec::None},
     /* RightBrace   */ {nullptr,  nullptr, Prec::None},
     /* Comma        */ {nullptr,  nullptr, Prec::None},
-    /* Dot          */ {nullptr,  nullptr, Prec::None},
+    /* Dot          */ {nullptr,  dot,     Prec::Call},
     /* Semicolon    */ {nullptr,  nullptr, Prec::None},
     /* Colon        */ {nullptr,  nullptr, Prec::None},
     /* Pipe         */ {nullptr,  nullptr, Prec::None},

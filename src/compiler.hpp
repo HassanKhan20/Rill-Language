@@ -88,6 +88,11 @@ void consume(TokenType type, const char* message);
 bool check(TokenType type);
 bool match(TokenType type);
 
+// Returns the token after parser.current without consuming anything. `{`
+// begins both a block and a map literal, and one extra token is exactly what
+// distinguishes them.
+Token peekAfterCurrent();
+
 // --- Error reporting ------------------------------------------------------
 
 void errorAt(const Token& token, const char* message);

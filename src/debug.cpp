@@ -76,6 +76,12 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
       return jumpInstruction("Loop", -1, chunk, offset);
     case OpCode::Call:
       return byteInstruction("Call", chunk, offset);
+    case OpCode::MakeMap:
+      return byteInstruction("MakeMap", chunk, offset);
+    case OpCode::GetProperty:
+      return constantInstruction("GetProperty", chunk, offset);
+    case OpCode::SetProperty:
+      return constantInstruction("SetProperty", chunk, offset);
     case OpCode::GetUpvalue:
       return byteInstruction("GetUpvalue", chunk, offset);
     case OpCode::SetUpvalue:
@@ -105,6 +111,7 @@ int disassembleInstruction(const Chunk& chunk, int offset) {
     case OpCode::False:
     case OpCode::Pop:
     case OpCode::Dup:
+    case OpCode::Swap:
     case OpCode::Negate:
     case OpCode::Not:
     case OpCode::Add:

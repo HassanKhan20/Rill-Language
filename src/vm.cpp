@@ -238,6 +238,58 @@ InterpretResult VM::run() {
       case OpCode::Pop:      pop(); break;
       case OpCode::Dup:      push(peek(0)); break;
 
+      case OpCode::Swap: {
+        Value a = pop();
+        Value b = pop();
+        push(a);
+        push(b);
+        break;
+      }
+
+      case OpCode::MakeMap: {
+        int fieldCount = READ_BYTE();
+        // The field names and values are on the stack and therefore rooted,
+        // so allocating the map here is safe.
+        ObjMap* map = newMap(nullptr);
+        push(objValue(map));  // Root the map before inserting into it.
+
+        Value* base = stackTop_ - 1 - 2 * fieldCount;
+        for (int i = 0; i < fieldCount; i++) {
+          map->fields.set(asString(base[2 * i]), base[2 * i + 1]);
+        }
+        stackTop_ = base;
+        push(objValue(map));
+        break;
+      }
+
+      case OpCode::GetProperty: {
+        ObjString* name = asString(READ_CONSTANT());
+        if (!isMap(peek(0))) {
+          RUNTIME_ERROR("only maps have properties");
+        }
+        ObjMap* map = asMap(peek(0));
+        Value value;
+        if (!mapGet(map, name, &value)) {
+          RUNTIME_ERROR("undefined property '%s'", name->chars);
+        }
+        pop();
+        push(value);
+        break;
+      }
+
+      case OpCode::SetProperty: {
+        ObjString* name = asString(READ_CONSTANT());
+        if (!isMap(peek(1))) {
+          RUNTIME_ERROR("only maps have properties");
+        }
+        // Assignment always writes to the receiver, never to a prototype.
+        asMap(peek(1))->fields.set(name, peek(0));
+        Value value = pop();
+        pop();  // The receiver.
+        push(value);
+        break;
+      }
+
       case OpCode::DefineGlobal: {
         ObjString* name = asString(READ_CONSTANT());
         globals_.set(name, peek(0));

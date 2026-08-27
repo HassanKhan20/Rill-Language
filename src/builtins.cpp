@@ -90,6 +90,23 @@ bool nativeNum(int, Value* args, Value* result) {
   return true;
 }
 
+// clone(p) makes a new empty map delegating to p. This is what Rill has
+// instead of classes and instantiation.
+bool nativeClone(int, Value* args, Value* result) {
+  if (!isMap(args[0])) return fail(result, "clone() expects a map");
+  *result = objValue(newMap(asMap(args[0])));
+  return true;
+}
+
+// has(m, name) reports whether the name resolves anywhere on m's chain.
+bool nativeHas(int, Value* args, Value* result) {
+  if (!isMap(args[0])) return fail(result, "has() expects a map");
+  if (!isString(args[1])) return fail(result, "has() expects a string name");
+  Value found;
+  *result = boolValue(mapGet(asMap(args[0]), asString(args[1]), &found));
+  return true;
+}
+
 // Forces a collection and reports the bytes still live afterwards. Exists so
 // the collector's behaviour is observable from a test and measurable from a
 // benchmark.
@@ -116,6 +133,8 @@ void defineBuiltins(VM& vm) {
   vm.defineNative("len", nativeLen, 1);
   vm.defineNative("str", nativeStr, 1);
   vm.defineNative("num", nativeNum, 1);
+  vm.defineNative("clone", nativeClone, 1);
+  vm.defineNative("has", nativeHas, 2);
 }
 
 }  // namespace rill
